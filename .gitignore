@@ -1,0 +1,9 @@
+.env
+*.sqlite
+*.sqlite-*
+__pycache__/
+cookies.txt
+youtube_token_*.json
+youtube_client.json
+ig_pool*.json
+.scout/

@@ -1,0 +1,44 @@
+{
+  "name": "kestrel",
+  "version": "1.4.1",
+  "description": "Your own vidIQ-style research agent for YouTube and Instagram: outliers, creator breakdowns for Instagram, YouTube and X with a ready-to-say script, live video stats, impressions and CTR. Runs on your own API keys.",
+  "author": { "name": "Harshil Rekhi", "url": "https://instagram.com/harshilrekhi" },
+  "homepage": "https://github.com/evogr1/kestrel",
+  "repository": "https://github.com/evogr1/kestrel",
+  "license": "MIT",
+  "keywords": ["youtube", "instagram", "creators", "research", "outliers", "mcp"],
+  "userConfig": {
+    "youtube_api_key": {
+      "type": "string",
+      "title": "YouTube Data API key",
+      "description": "Free from Google Cloud Console (APIs and Services, Credentials). Kestrel's YouTube research runs on this key's daily quota.",
+      "sensitive": true,
+      "required": true
+    },
+    "instagram_token": {
+      "type": "string",
+      "title": "Instagram Graph API token (optional)",
+      "description": "Long-lived token from your own Meta app, linked to an Instagram Business or Creator account. Needed for Instagram tools and creator breakdowns.",
+      "sensitive": true,
+      "default": ""
+    },
+    "instagram_user_id": {
+      "type": "string",
+      "title": "Instagram user ID for that token (optional)",
+      "description": "The numeric instagram_business_account id of the account the token belongs to. The README shows how to find it.",
+      "default": ""
+    },
+    "my_instagram": {
+      "type": "string",
+      "title": "Your Instagram username (optional)",
+      "description": "Creator breakdowns compare the creator with this account and write advice for it. Leave empty to skip the comparison.",
+      "default": ""
+    },
+    "follow_handle": {
+      "type": "string",
+      "title": "Handle on the breakdown's end card (optional)",
+      "description": "The animated breakdown ends with 'Follow @<this>'. Leave empty to show 'Built with Kestrel'.",
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "kestrel",
+  "description": "Kestrel, an open-source YouTube and Instagram research agent that runs on your own keys.",
+  "owner": { "name": "Harshil Rekhi" },
+  "plugins": [
+    { "name": "kestrel", "source": "./", "description": "YouTube and Instagram research agent: outliers, creator breakdowns, scripts, live stats." }
+  ]
+}

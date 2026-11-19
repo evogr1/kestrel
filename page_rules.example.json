@@ -1,0 +1,16 @@
+{
+  "my-news-page": {
+    "sources": ["instagram", "youtube_shorts"],
+    "exclude_any": ["election", "giveaway"],
+    "min_multiple": 5,
+    "max_age_days": 7,
+    "per_page": 6,
+    "english_only": true,
+    "skip_unscored": true
+  },
+  "my-diy-channel": {
+    "include_any": ["fix", "repair", "hack*"],
+    "min_views": 50000,
+    "gap_seeds": ["drain cleaning", "home repair hacks"]
+  }
+}

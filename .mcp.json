@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "kestrel": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scout_mcp.py"],
+      "env": {
+        "YOUTUBE_API_KEY": "${user_config.youtube_api_key}",
+        "SCOUT_IG_TOKEN": "${user_config.instagram_token}",
+        "SCOUT_IG_USER_ID": "${user_config.instagram_user_id}",
+        "SCOUT_SHOWCASE_ME": "${user_config.my_instagram}",
+        "SCOUT_SHOWCASE_CTA": "${user_config.follow_handle}",
+        "SCOUT_DB": "${CLAUDE_PLUGIN_DATA}/cache.sqlite",
+        "SCOUT_CALLER": "plugin"
+      }
+    }
+  }
+}
