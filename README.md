@@ -95,7 +95,7 @@ Configure these environment variables on the server:
 
 The Docker image installs `cryptography`. Keep the persistent `/data` volume: it stores the per-user auth database. Do not rotate the encryption key unless you first re-encrypt every stored token.
 
-Kestrel requests `instagram_business_basic`, `instagram_business_manage_insights`, `instagram_business_content_publish`, `instagram_business_manage_comments` and `instagram_business_manage_messages`. These cover profile/media, insights, publishing, comments and messaging. Meta must grant the relevant access level and App Review approval before external customers can use restricted permissions. An Instagram Login token is used with `graph.instagram.com`; it is not interchangeable with the older Facebook Login token on `graph.facebook.com`.
+Kestrel requests `instagram_business_basic`, `instagram_business_manage_insights`, `instagram_business_content_publish`, `instagram_business_manage_comments` and `instagram_business_manage_messages`. These cover profile/media, insights, publishing, comments and messaging. Meta must grant the relevant access level and App Review approval before external customers can use restricted permissions. An Instagram Login token is used with `graph.instagram.com`; it is not interchangeable with the older Facebook Login token on `graph.facebook.com`. The current Kestrel tools actively use profile/media reads and insights; publishing, comment-management and messaging tools are not exposed yet, so those additional scopes are requested in preparation for the next feature phase and must be justified with matching product functionality in Meta App Review.
 
 The per-user auth key is embedded in that user's MCP URL. It is shown once after connection, stored only as a hash, and can be revoked by reconnecting (rotates the key) or disconnecting.
 
@@ -129,6 +129,7 @@ Everything is an environment variable (the `SCOUT_` prefix is from the project's
 | `SCOUT_YT_DAILY_UNITS` | Units Kestrel may spend per key per day (default 8000) |
 | `SCOUT_YT_CALLER_PCT` | Most of the total one caller (job, chat) may use (default 30) |
 | `SCOUT_IG_CLIENT_ID`, `SCOUT_IG_CLIENT_SECRET`, `SCOUT_IG_REDIRECT_URI` | Instagram Business Login OAuth credentials and callback |
+| `SCOUT_IG_GRAPH_VERSION` | Graph API version for Instagram Login (default v27.0) |
 | `SCOUT_TOKEN_ENCRYPTION_KEY`, `SCOUT_AUTH_DB` | Encryption key and per-user auth database |
 | `SCOUT_IG_TOKEN`, `SCOUT_IG_USER_ID` | Legacy/shared Business Discovery token and account id |
 | `SCOUT_IG_POOL` | JSON file with several tokens: `[{"label": "app1", "token": "...", "ig_user_id": "..."}]` |
