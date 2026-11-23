@@ -218,7 +218,7 @@ def instagram_account(user_id):
             row = dict(row)
             row["expires_at"] = expires
         return {"label": "user:" + user_id, "token": token, "ig_user_id": row["ig_user_id"],
-                "username": row["username"], "api_host": "graph.instagram.com", "api_version": os.environ.get("SCOUT_IG_GRAPH_VERSION", "v26.0"),
+                "username": row["username"], "api_host": "graph.instagram.com", "api_version": os.environ.get("SCOUT_IG_GRAPH_VERSION", "v27.0"),
                 "expires_at": row["expires_at"], "scopes": json.loads(row["scopes"])}
     finally:
         db.close()
