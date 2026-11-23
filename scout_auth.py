@@ -263,8 +263,8 @@ def disconnect(user_id):
         try:
             cache.execute("delete from cache where k like ?", ("mine:igme:" + row["ig_user_id"],))
             cache.execute("delete from cache where k like ?", ("mine:igins:" + row["ig_user_id"] + ":%",))
-            cache.execute("delete from cache where k like ?", ("myins:%",))
-            cache.execute("delete from cache where k like ?", ("myinsfresh:%",))
+            cache.execute("delete from cache where k=?", ("myins:" + row["username"].lower(),))
+            cache.execute("delete from cache where k=?", ("myinsfresh:" + row["username"].lower(),))
             cache.execute("delete from my_profile_users where user_id=?", (user_id,))
         except sqlite3.OperationalError:
             pass
