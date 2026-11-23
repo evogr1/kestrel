@@ -94,6 +94,7 @@ def _request(url, data=None):
 
 
 def start_url():
+    _fernet()  # fail before redirect if durable token encryption is not configured
     cid, secret, redirect = _config()
     state = secrets.token_urlsafe(32)
     db = _connect()
@@ -255,7 +256,16 @@ def success_page(result, public_url):
 <section class="panel"><h2>Your private Kestrel connector URL</h2><p>Copy this URL into your ChatGPT or Claude custom MCP connector. It is unique to you and can be revoked.</p>
 <div class="url"><code id="url">{endpoint}</code></div><button onclick="navigator.clipboard.writeText(document.getElementById('url').textContent).then(()=>this.textContent='Copied')">Copy connector URL</button>
 <p><small>This URL is your personal Kestrel credential. Do not share it. You will only see it once. Reconnect Instagram to rotate it.</small></p></section>
-<p>Use this connector to access your own Instagram insights. Public creator research continues to use Kestrel's separate discovery configuration.</p></main></body></html>"""
+<p>Use this connector to access your own Instagram insights. Public creator research continues to use Kestrel's separate discovery configuration.</p>
+<p><a href="{html.escape(public_url.rstrip('/') + '/auth/disconnect/' + key, quote=True)}">Disconnect this Instagram account</a></p></main></body></html>"""
+
+
+def disconnect_page(key):
+    safe = html.escape(key, quote=True)
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Disconnect Kestrel</title></head>
+<body style="font:16px system-ui;max-width:640px;margin:60px auto;padding:24px"><h1>Disconnect Instagram from Kestrel?</h1>
+<p>This immediately revokes your private Kestrel connector URL and deletes the encrypted Instagram token from Kestrel.</p>
+<form method="post" action="/auth/disconnect/{safe}"><button type="submit">Disconnect my account</button></form></body></html>"""
 
 
 def error_page(message, public_url):
