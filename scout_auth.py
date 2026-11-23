@@ -5,7 +5,6 @@ at rest and are never returned by this module. Configure:
   SCOUT_IG_CLIENT_ID, SCOUT_IG_CLIENT_SECRET, SCOUT_IG_REDIRECT_URI
   SCOUT_TOKEN_ENCRYPTION_KEY (Fernet key; generate with the command in README)
 """
-import base64
 import hashlib
 import html
 import json
