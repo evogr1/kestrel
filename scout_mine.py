@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scout_core import ScoutError, med, age_days, HOME, UA
+from scout_core import ScoutError, med, age_days, HOME, UA, CALLER
 
 YT_ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
 YT_DATA = "https://www.googleapis.com/youtube/v3/"
@@ -357,12 +357,14 @@ class Mine:
     # ---------------------------------------------------------------- Instagram (own accounts)
     def _ig_get(self, t, path, **q):
         q["access_token"] = t["token"]
-        return _http("https://graph.facebook.com/%s/%s?%s" % (self.ig.cfg.ig_version, path, urllib.parse.urlencode(q)))
+        host = t.get("api_host") or "graph.facebook.com"
+        version = t.get("api_version") or self.ig.cfg.ig_version
+        return _http("https://%s/%s/%s?%s" % (host, version, path, urllib.parse.urlencode(q)))
 
     def _ig_pick(self, account):
-        pool = self.ig.pool()
+        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
         if not pool:
-            raise ScoutError("no Instagram token found. Set SCOUT_IG_POOL.", 501)
+            raise ScoutError("No Instagram account is connected to this Kestrel user. Open /connect/ and connect Instagram first.", 401)
         if not account:
             return pool
         a = account.strip().lstrip("@").lower()
@@ -385,7 +387,8 @@ class Mine:
 
     def ig_accounts(self):
         out = []
-        for t in self.ig.pool():
+        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
+        for t in pool:
             try:
                 p = self._ig_profile(t)
                 out.append({"label": t["label"], "username": p.get("username"), "followers": p.get("followers_count"), "posts": p.get("media_count")})
