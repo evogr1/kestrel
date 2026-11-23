@@ -176,6 +176,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             return bool(got) and hmac.compare_digest(got.encode(), key.encode())
 
         def _handle(self, verb):
+            scout_core.CALLER.user_id = None
             u = urllib.parse.urlparse(self.path)
             if u.path == "/health":
                 return self._send(200, {"ok": True})
