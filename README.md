@@ -21,13 +21,9 @@ Kestrel is **free**: no credits, no paid tier. The only limits are YouTube's and
 
 ## Connect Kestrel to your AI
 
-For the hosted Kestrel server, share this page:
+For the hosted Kestrel server, share **https://scout.solodac.com/connect/**. Each person connects their own Instagram professional account and receives a unique, revocable MCP URL. They do not need to clone this repository or install anything locally. They still need to approve adding the connector in their own ChatGPT or Claude account.
 
-**https://scout.solodac.com/connect/**
-
-The page provides the remote MCP URL and separate setup steps for ChatGPT and Claude. Users do not need to clone this repository or install anything locally. They must approve the connector in their own AI account; an AI cannot silently install a connector.
-
-The hosted MCP URL is a bearer credential. Anyone who receives it can use the server, so share it only with intended users and rotate `SCOUT_MCP_SECRET` if it leaks. This shared-server setup does not provide per-user Instagram OAuth.
+The old shared `SCOUT_MCP_SECRET` connector route is disabled by default. Do not enable `SCOUT_ALLOW_SHARED_MCP` for a multi-user deployment.
 
 ## Pick how you run it
 
@@ -85,19 +81,27 @@ Optional cron jobs on the host (these use Docker; without Docker, run them from 
 
 The free quota is 10,000 units a day. Kestrel caches answers, keeps its own daily budget (`SCOUT_YT_DAILY_UNITS`, default 8000) and falls back to `yt-dlp` when the budget runs out. For heavier use, add more keys from other projects as `YOUTUBE_API_KEY_2` and up.
 
-### Instagram (optional, needed for Instagram tools and creator breakdowns)
+### Instagram: each user's own account (OAuth)
 
-Kestrel reads other public Business and Creator accounts through Meta's official **Business Discovery** API. For that you need:
+The hosted multi-user server uses **Instagram Business Login**. Every person connects their own Instagram Business or Creator account at `/connect/`; Kestrel stores a separate encrypted long-lived token and issues a separate revocable MCP URL. A user's private Instagram token is never shared with another Kestrel user.
 
-1. An Instagram **Business or Creator** account, linked to a **Facebook Page** you manage.
-2. A Meta app at [developers.facebook.com](https://developers.facebook.com) (type: Business). Add the **Instagram Graph API** product.
-3. In the [Graph API Explorer](https://developers.facebook.com/tools/explorer), pick your app and generate a user token with `instagram_basic`, `instagram_manage_insights`, `pages_show_list`, `pages_read_engagement`.
-4. Exchange it for a long-lived token (about 60 days) in the [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken) ("Extend Access Token"). For a token that doesn't expire, create a System User in Meta Business Settings and generate its token for the app.
-5. Find your Instagram user id: in the Explorer, run `me/accounts?fields=instagram_business_account` and copy the `instagram_business_account` id.
+Configure these environment variables on the server:
 
-Put the token and id in the plugin settings, or in `.env` as `SCOUT_IG_TOKEN` and `SCOUT_IG_USER_ID`.
+- `SCOUT_IG_CLIENT_ID`: the **Instagram App ID** shown under the Instagram product's API setup (not necessarily the generic Meta App ID).
+- `SCOUT_IG_CLIENT_SECRET`: the matching Instagram App Secret. Server-side only; never put it in the browser or repository.
+- `SCOUT_IG_REDIRECT_URI`: exactly `https://scout.solodac.com/auth/instagram/callback` (also add this exact URI in Meta's Valid OAuth Redirect URIs).
+- `SCOUT_PUBLIC_URL=https://scout.solodac.com`
+- `SCOUT_TOKEN_ENCRYPTION_KEY`: generate once with `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Keep it stable and back it up securely; losing it makes stored Instagram tokens unreadable.
 
-Standard access works for accounts in your own Meta business; you don't need App Review for personal research. Meta's limit is about 200 calls per hour per app user, shared by every token from the same app. Kestrel paces itself (`SCOUT_IG_PER_HOUR`, default 120) and serves cached results when the hour's budget is spent.
+The Docker image installs `cryptography`. Keep the persistent `/data` volume: it stores the per-user auth database. Do not rotate the encryption key unless you first re-encrypt every stored token.
+
+Kestrel requests `instagram_business_basic`, `instagram_business_manage_insights`, `instagram_business_content_publish`, `instagram_business_manage_comments` and `instagram_business_manage_messages`. These cover profile/media, insights, publishing, comments and messaging. Meta must grant the relevant access level and App Review approval before external customers can use restricted permissions. An Instagram Login token is used with `graph.instagram.com`; it is not interchangeable with the older Facebook Login token on `graph.facebook.com`.
+
+The per-user auth key is embedded in that user's MCP URL. It is shown once after connection, stored only as a hash, and can be revoked by reconnecting (rotates the key) or disconnecting.
+
+### Public Instagram creator research (Business Discovery)
+
+Kestrel's public creator breakdown still uses the separately configured shared Business Discovery token pool. Business Discovery is a distinct API path from Instagram Login. Configure `SCOUT_IG_TOKEN` and `SCOUT_IG_USER_ID` or `SCOUT_IG_POOL` with an eligible Business/Creator account and the Facebook Login permissions required by Meta's Business Discovery API. Do not use a user's Instagram Login token for public Business Discovery.
 
 ### Your own YouTube channel (optional, for live stats, retention, impressions and CTR)
 
@@ -124,7 +128,9 @@ Everything is an environment variable (the `SCOUT_` prefix is from the project's
 | `YOUTUBE_API_KEY`, `YOUTUBE_API_KEY_2..9` | YouTube Data API keys, each with its own daily budget |
 | `SCOUT_YT_DAILY_UNITS` | Units Kestrel may spend per key per day (default 8000) |
 | `SCOUT_YT_CALLER_PCT` | Most of the total one caller (job, chat) may use (default 30) |
-| `SCOUT_IG_TOKEN`, `SCOUT_IG_USER_ID` | One Instagram token and its account id |
+| `SCOUT_IG_CLIENT_ID`, `SCOUT_IG_CLIENT_SECRET`, `SCOUT_IG_REDIRECT_URI` | Instagram Business Login OAuth credentials and callback |
+| `SCOUT_TOKEN_ENCRYPTION_KEY`, `SCOUT_AUTH_DB` | Encryption key and per-user auth database |
+| `SCOUT_IG_TOKEN`, `SCOUT_IG_USER_ID` | Legacy/shared Business Discovery token and account id |
 | `SCOUT_IG_POOL` | JSON file with several tokens: `[{"label": "app1", "token": "...", "ig_user_id": "..."}]` |
 | `SCOUT_IG_PER_HOUR` | Instagram calls per hour per Meta app (default 120). Per app: `SCOUT_IG_PER_HOUR_<LABEL>` |
 | `SCOUT_SHOWCASE_ME`, `SCOUT_SHOWCASE_CTA` | Your Instagram to compare with, and the handle on the breakdown's end card |
