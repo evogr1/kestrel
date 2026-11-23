@@ -13,10 +13,11 @@ class PerUserAuthTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.old = {k: os.environ.get(k) for k in (
-            "SCOUT_AUTH_DB", "SCOUT_IG_CLIENT_ID", "SCOUT_IG_CLIENT_SECRET",
+            "SCOUT_AUTH_DB", "SCOUT_DB", "SCOUT_IG_CLIENT_ID", "SCOUT_IG_CLIENT_SECRET",
             "SCOUT_IG_REDIRECT_URI", "SCOUT_TOKEN_ENCRYPTION_KEY",
         )}
         os.environ["SCOUT_AUTH_DB"] = os.path.join(self.tmp.name, "auth.sqlite")
+        os.environ["SCOUT_DB"] = os.path.join(self.tmp.name, "cache.sqlite")
         os.environ["SCOUT_IG_CLIENT_ID"] = "test-instagram-app-id"
         os.environ["SCOUT_IG_CLIENT_SECRET"] = "test-instagram-app-secret"
         os.environ["SCOUT_IG_REDIRECT_URI"] = "https://example.test/auth/instagram/callback"
@@ -54,7 +55,18 @@ class PerUserAuthTests(unittest.TestCase):
         self.assertNotIn(b"long-lived-secret-token", stored)
         self.assertNotIn(b"short-lived-test-token", stored)
 
+        import sqlite3
+        cache = sqlite3.connect(os.environ["SCOUT_DB"])
+        cache.execute("create table cache(k text primary key, v text, exp real)")
+        cache.execute("create table my_profile_users(user_id text, k text, v text, primary key(user_id,k))")
+        cache.execute("insert into my_profile_users values(?,?,?)", (result["user_id"], "niche", "test niche"))
+        cache.commit()
+        cache.close()
+
         scout_auth.disconnect(result["user_id"])
+        cache = sqlite3.connect(os.environ["SCOUT_DB"])
+        self.assertEqual(cache.execute("select count(*) from my_profile_users").fetchone()[0], 0)
+        cache.close()
         self.assertIsNone(scout_auth.authenticate_key(result["mcp_key"]))
         self.assertIsNone(scout_auth.instagram_account(result["user_id"]))
 
