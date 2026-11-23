@@ -32,7 +32,11 @@ def _db_path():
 
 
 def _connect():
-    db = sqlite3.connect(_db_path(), timeout=20)
+    path = _db_path()
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    db = sqlite3.connect(path, timeout=20)
     db.row_factory = sqlite3.Row
     db.execute("pragma journal_mode=WAL")
     db.execute("""create table if not exists auth_users (
@@ -214,7 +218,7 @@ def instagram_account(user_id):
             row = dict(row)
             row["expires_at"] = expires
         return {"label": "user:" + user_id, "token": token, "ig_user_id": row["ig_user_id"],
-                "username": row["username"], "api_host": "graph.instagram.com", "api_version": "v26.0",
+                "username": row["username"], "api_host": "graph.instagram.com", "api_version": os.environ.get("SCOUT_IG_GRAPH_VERSION", "v26.0"),
                 "expires_at": row["expires_at"], "scopes": json.loads(row["scopes"])}
     finally:
         db.close()
