@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from scout_core import ScoutError, Config
 from scout_extras import Kestrel
 import scout_legal
+import scout_connect
 import scout_core
 import scout_remote_mcp
 
@@ -175,6 +176,17 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             u = urllib.parse.urlparse(self.path)
             if u.path == "/health":
                 return self._send(200, {"ok": True})
+            if u.path in ("/connect", "/connect/") and verb == "GET":
+                base = scout_connect.public_url()
+                mcp_url = base + "/mcp/" + mcp_secret if mcp_secret else ""
+                if not mcp_url:
+                    return self._send(503, {"error": "Kestrel remote MCP is not configured"})
+                b = scout_connect.page(mcp_url).encode("utf8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                return self.wfile.write(b)
             if u.path in scout_legal.PAGES and verb == "GET":
                 b = scout_legal.PAGES[u.path]().encode("utf8")
                 self.send_response(200)
