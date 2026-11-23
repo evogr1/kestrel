@@ -153,7 +153,7 @@ def finish(code, state):
     token = long.get("access_token")
     if not token:
         raise RuntimeError("Meta did not return a long-lived Instagram token")
-    profile = _request("https://graph.instagram.com/v26.0/me?" + urllib.parse.urlencode({
+    profile = _request("https://graph.instagram.com/%s/me?" % os.environ.get("SCOUT_IG_GRAPH_VERSION", "v27.0") + urllib.parse.urlencode({
         "fields": "user_id,username", "access_token": token,
     }))
     ig_id = str(profile.get("user_id") or short.get("user_id") or "")
@@ -244,14 +244,30 @@ def connection_status(user_id):
 def disconnect(user_id):
     db = _connect()
     try:
+        row = db.execute("select ig_user_id,username from auth_users where user_id=?", (user_id,)).fetchone()
         now = time.time()
         db.execute("update auth_users set revoked_at=?,encrypted_token='',updated_at=? where user_id=?",
                    (now, now, user_id))
         db.execute("update auth_keys set revoked_at=? where user_id=? and revoked_at is null", (now, user_id))
         db.commit()
-        return {"disconnected": True}
     finally:
         db.close()
+    # Remove the account-specific cache and saved Kestrel profile as part of local disconnect.
+    cache_path = os.environ.get("SCOUT_DB", "/data/.scout/cache.sqlite")
+    if row and os.path.exists(cache_path):
+        cache = sqlite3.connect(cache_path, timeout=20)
+        try:
+            cache.execute("delete from cache where k like ?", ("mine:igme:" + row["ig_user_id"],))
+            cache.execute("delete from cache where k like ?", ("mine:igins:" + row["ig_user_id"] + ":%",))
+            cache.execute("delete from cache where k like ?", ("myins:%",))
+            cache.execute("delete from cache where k like ?", ("myinsfresh:%",))
+            cache.execute("delete from my_profile_users where user_id=?", (user_id,))
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            cache.commit()
+            cache.close()
+    return {"disconnected": True}
 
 
 def success_page(result, public_url):
