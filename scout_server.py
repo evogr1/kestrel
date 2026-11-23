@@ -219,6 +219,29 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 return self.wfile.write(b)
+            if u.path.startswith("/auth/disconnect/"):
+                raw_key = u.path[len("/auth/disconnect/"):].strip("/")
+                user_id = scout_auth.authenticate_key(raw_key)
+                if not user_id:
+                    return self._send(404, {"error": "not found"})
+                if verb == "GET":
+                    b = scout_auth.disconnect_page(raw_key).encode("utf8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+                if verb == "POST":
+                    scout_auth.disconnect(user_id)
+                    b = b"<!doctype html><html><body style='font:16px system-ui;max-width:600px;margin:60px auto;padding:24px'><h1>Kestrel disconnected</h1><p>Your private connector URL has been revoked and your Instagram token has been deleted from Kestrel.</p><p>To revoke the app's access at Instagram too, remove Kestrel from your Instagram Apps and Websites settings.</p></body></html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+                return self._send(405, {"error": "use GET or POST"})
             if u.path == "/auth/status" and verb == "GET":
                 token = self.headers.get("Authorization", "")
                 token = token[7:] if token.lower().startswith("bearer ") else ""
