@@ -35,7 +35,11 @@ def _connect():
     path = _db_path()
     parent = os.path.dirname(path)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(parent, 0o700)
+        except OSError:
+            pass
     db = sqlite3.connect(path, timeout=20)
     try:
         os.chmod(path, 0o600)
