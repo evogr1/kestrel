@@ -37,6 +37,10 @@ def _connect():
     if parent:
         os.makedirs(parent, exist_ok=True)
     db = sqlite3.connect(path, timeout=20)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
     db.row_factory = sqlite3.Row
     db.execute("pragma journal_mode=WAL")
     db.execute("""create table if not exists auth_users (
