@@ -157,7 +157,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             if mcp_secret:
                 line = line.replace(mcp_secret, "<secret>")
             line = __import__("re").sub(r"/mcp/u/[A-Za-z0-9_-]+", "/mcp/u/<user-key>", line)
-            line = __import__("re").sub(r"([?&](?:code|state)=)[^& ]+", r"\\1<redacted>", line)
+            line = __import__("re").sub(r"([?&](?:code|state)=)[^& ]+", r"\1<redacted>", line)
             sys.stderr.write("%s %s\n" % (self.address_string(), line))
 
         def _send(self, code, obj):
