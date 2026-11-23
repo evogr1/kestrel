@@ -248,14 +248,21 @@ def disconnect(user_id):
 def success_page(result, public_url):
     key = result["mcp_key"]
     endpoint = html.escape(public_url.rstrip("/") + "/mcp/u/" + key, quote=True)
-    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kestrel connected</title><style>body{margin:0;background:#0b1018;color:#f3f5f8;font:16px/1.6 system-ui}main{max-width:680px;margin:64px auto;padding:24px}.panel{background:#141d2a;border:1px solid #29384d;border-radius:14px;padding:22px}code{overflow-wrap:anywhere;color:#a9ceff}.url{background:#080d14;padding:14px;border-radius:8px}button{background:#4d9cff;border:0;border-radius:8px;padding:12px 18px;font-weight:700;cursor:pointer}</style></head>
-<body><main><h1>Instagram connected</h1><p>@""" + html.escape(result["username"]) + """ is now connected to your Kestrel account.</p>
-<section class="panel"><h2>Your private Kestrel connector URL</h2><p>Copy this URL into your ChatGPT or Claude custom MCP connector. It is unique to you and can be revoked by disconnecting.</p>
-<div class="url"><code id="url">""" + endpoint + """</code></div><button onclick="navigator.clipboard.writeText(document.getElementById('url').textContent).then(()=>this.textContent='Copied')">Copy connector URL</button>
+    username = html.escape(result["username"])
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kestrel connected</title><style>body{{margin:0;background:#0b1018;color:#f3f5f8;font:16px/1.6 system-ui}}main{{max-width:680px;margin:64px auto;padding:24px}}.panel{{background:#141d2a;border:1px solid #29384d;border-radius:14px;padding:22px}}code{{overflow-wrap:anywhere;color:#a9ceff}}.url{{background:#080d14;padding:14px;border-radius:8px}}button{{background:#4d9cff;border:0;border-radius:8px;padding:12px 18px;font-weight:700;cursor:pointer}}</style></head>
+<body><main><h1>Instagram connected</h1><p>@{username} is now connected to your Kestrel account.</p>
+<section class="panel"><h2>Your private Kestrel connector URL</h2><p>Copy this URL into your ChatGPT or Claude custom MCP connector. It is unique to you and can be revoked.</p>
+<div class="url"><code id="url">{endpoint}</code></div><button onclick="navigator.clipboard.writeText(document.getElementById('url').textContent).then(()=>this.textContent='Copied')">Copy connector URL</button>
 <p><small>This URL is your personal Kestrel credential. Do not share it. You will only see it once. Reconnect Instagram to rotate it.</small></p></section>
 <p>Use this connector to access your own Instagram insights. Public creator research continues to use Kestrel's separate discovery configuration.</p></main></body></html>"""
 
+
+def error_page(message, public_url):
+    safe_message = html.escape(str(message))
+    retry = html.escape(public_url.rstrip("/") + "/connect/", quote=True)
+    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kestrel connection error</title></head>
+<body style="font:16px system-ui;max-width:680px;margin:60px auto;padding:24px"><h1>Instagram connection failed</h1><p>{safe_message}</p><p><a href="{retry}">Start again</a></p></body></html>"""
 
 def error_page(message, public_url):
     return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kestrel connection error</title></head>
