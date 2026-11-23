@@ -508,6 +508,18 @@ class Instagram:
         return load_pool([self.cfg.ig_pool, os.path.join(HOME, ".scout", "ig_pool.json"),
                           os.path.join(HOME, ".kestrel-ig-discovery-pool.json"), os.path.join(HOME, ".kestrel-ig-discovery.json")])
 
+    def user_pool(self):
+        """The authenticated caller's own Instagram Login token, never the shared discovery pool."""
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            return []
+        try:
+            import scout_auth
+            account = scout_auth.instagram_account(user_id)
+            return [account] if account else []
+        except RuntimeError as e:
+            raise ScoutError(str(e), 503)
+
     def seeds(self):
         for p in (self.cfg.ig_seeds, os.path.join(HOME, ".scout", "ig_seeds.json")):
             if p and os.path.exists(p):
