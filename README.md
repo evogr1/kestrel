@@ -19,14 +19,17 @@ Kestrel is **free**: no credits, no paid tier. The only limits are YouTube's and
 
 ---
 
-## Pick how you run it
+## Connect Kestrel to your AI
 
-| | Claude Code plugin | Self-hosted server |
-|---|---|---|
-| Works in | Claude Code (terminal, desktop, IDE) | claude.ai, the Claude apps, ChatGPT, any MCP client, plain REST |
-| Setup | Install, paste your keys | A small server (any VPS or home machine) behind HTTPS |
-| Animated breakdown | Text only in the terminal | Yes, inside the chat |
-| Daily jobs, live stats history | Runs while you use it | Yes, with cron |
+For the hosted Kestrel server, share this page:
+
+**https://scout.solodac.com/connect/**
+
+The page provides the remote MCP URL and separate setup steps for ChatGPT and Claude. Users do not need to clone this repository or install anything locally. They must approve the connector in their own AI account; an AI cannot silently install a connector.
+
+The hosted MCP URL is a bearer credential. Anyone who receives it can use the server, so share it only with intended users and rotate `SCOUT_MCP_SECRET` if it leaks. This shared-server setup does not provide per-user Instagram OAuth.
+
+## Pick how you run it
 
 ### Option A: Claude Code plugin
 
