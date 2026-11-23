@@ -18,6 +18,7 @@ from scout_core import ScoutError, Config
 from scout_extras import Kestrel
 import scout_legal
 import scout_connect
+import scout_auth
 import scout_core
 import scout_remote_mcp
 
@@ -153,8 +154,10 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
     class H(BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
             line = fmt % a
-            if mcp_secret:                      # the connector URL is a key: never write it to logs
+            if mcp_secret:
                 line = line.replace(mcp_secret, "<secret>")
+            line = __import__("re").sub(r"/mcp/u/[A-Za-z0-9_-]+", "/mcp/u/<user-key>", line)
+            line = __import__("re").sub(r"([?&](?:code|state)=)[^& ]+", r"\\1<redacted>", line)
             sys.stderr.write("%s %s\n" % (self.address_string(), line))
 
         def _send(self, code, obj):
@@ -177,16 +180,85 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             if u.path == "/health":
                 return self._send(200, {"ok": True})
             if u.path in ("/connect", "/connect/") and verb == "GET":
-                base = scout_connect.public_url()
-                mcp_url = base + "/mcp/" + mcp_secret if mcp_secret else ""
-                if not mcp_url:
-                    return self._send(503, {"error": "Kestrel remote MCP is not configured"})
-                b = scout_connect.page(mcp_url).encode("utf8")
+                b = scout_connect.page(scout_connect.public_url()).encode("utf8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 return self.wfile.write(b)
+            if u.path == "/auth/instagram/start" and verb == "GET":
+                try:
+                    self.send_response(302)
+                    self.send_header("Location", scout_auth.start_url())
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                except Exception as e:
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(503)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+            if u.path == "/auth/instagram/callback" and verb == "GET":
+                q = urllib.parse.parse_qs(u.query)
+                try:
+                    if q.get("error"):
+                        raise RuntimeError("Instagram authorization was declined")
+                    result = scout_auth.finish((q.get("code") or [""])[0].rstrip("#_"), (q.get("state") or [""])[0])
+                    b = scout_auth.success_page(result, scout_connect.public_url()).encode("utf8")
+                    self.send_response(200)
+                except Exception as e:
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(400)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                return self.wfile.write(b)
+            if u.path == "/auth/status" and verb == "GET":
+                token = self.headers.get("Authorization", "")
+                token = token[7:] if token.lower().startswith("bearer ") else ""
+                user_id = scout_auth.authenticate_key(token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid Kestrel credential"})
+                return self._send(200, scout_auth.connection_status(user_id))
+            if u.path == "/auth/disconnect" and verb == "POST":
+                token = self.headers.get("Authorization", "")
+                token = token[7:] if token.lower().startswith("bearer ") else ""
+                user_id = scout_auth.authenticate_key(token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid Kestrel credential"})
+                return self._send(200, scout_auth.disconnect(user_id))
+            if u.path.startswith("/mcp/u/"):
+                raw_key = u.path[len("/mcp/u/"):].strip("/")
+                user_id = scout_auth.authenticate_key(raw_key)
+                if not user_id:
+                    return self._send(404, {"error": "not found"})
+                scout_core.CALLER.name = "mcp"
+                scout_core.CALLER.user_id = user_id
+                if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
+                    return self._sse_list_changed()
+                if verb != "POST":
+                    return self._send(405, {"error": "use POST"})
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "body too large"})
+                try:
+                    msg = json.loads(self.rfile.read(n).decode("utf8") or "{}")
+                except ValueError:
+                    return self._send(400, {"error": "body must be JSON"})
+                out = [scout_remote_mcp.handle(scout, ROUTES, _conv, m) for m in (msg if isinstance(msg, list) else [msg])]
+                out = [o for o in out if o is not None]
+                if not out:
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                return self._send(200, out if isinstance(msg, list) else out[0])
             if u.path in scout_legal.PAGES and verb == "GET":
                 b = scout_legal.PAGES[u.path]().encode("utf8")
                 self.send_response(200)
@@ -196,7 +268,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 return self.wfile.write(b)
             if u.path.startswith("/.well-known/") or u.path.rstrip("/") == "/mcp":   # 14 Nov: 404, not 401, so claude.ai never starts an OAuth sign-in (the secret URL is the auth)
                 return self._send(404, {"error": "not found"})
-            if mcp_secret and u.path.startswith("/mcp/"):
+            if mcp_secret and os.environ.get("SCOUT_ALLOW_SHARED_MCP") == "1" and u.path.startswith("/mcp/"):
                 if not hmac.compare_digest(u.path[5:].strip("/").encode(), mcp_secret.encode()):
                     return self._send(404, {"error": "not found"})
                 if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
@@ -211,6 +283,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 except ValueError:
                     return self._send(400, {"error": "body must be JSON"})
                 scout_core.CALLER.name = "mcp"
+                scout_core.CALLER.user_id = None
                 out = [scout_remote_mcp.handle(scout, ROUTES, _conv, m) for m in (msg if isinstance(msg, list) else [msg])]
                 out = [o for o in out if o is not None]
                 if not out:
