@@ -1,7 +1,9 @@
-"""Offline tests for per-user Instagram OAuth credential storage."""
+"""Offline tests for Instagram identity/token storage."""
+import hashlib
 import os
 import tempfile
 import unittest
+from urllib.parse import parse_qs, urlparse
 from unittest import mock
 
 from cryptography.fernet import Fernet
@@ -9,73 +11,83 @@ from cryptography.fernet import Fernet
 import scout_auth
 
 
-class PerUserAuthTests(unittest.TestCase):
+class InstagramAuthTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.old = {k: os.environ.get(k) for k in (
-            "SCOUT_AUTH_DB", "SCOUT_DB", "SCOUT_IG_CLIENT_ID", "SCOUT_IG_CLIENT_SECRET",
-            "SCOUT_IG_REDIRECT_URI", "SCOUT_TOKEN_ENCRYPTION_KEY",
+            "SCOUT_AUTH_DB", "SCOUT_DB", "SCOUT_IG_CLIENT_ID",
+            "SCOUT_IG_CLIENT_SECRET", "SCOUT_IG_REDIRECT_URI",
+            "SCOUT_TOKEN_ENCRYPTION_KEY", "SCOUT_IG_GRAPH_VERSION",
         )}
         os.environ["SCOUT_AUTH_DB"] = os.path.join(self.tmp.name, "auth.sqlite")
         os.environ["SCOUT_DB"] = os.path.join(self.tmp.name, "cache.sqlite")
-        os.environ["SCOUT_IG_CLIENT_ID"] = "test-instagram-app-id"
-        os.environ["SCOUT_IG_CLIENT_SECRET"] = "test-instagram-app-secret"
-        os.environ["SCOUT_IG_REDIRECT_URI"] = "https://example.test/auth/instagram/callback"
+        os.environ["SCOUT_IG_CLIENT_ID"] = "test-app-id"
+        os.environ["SCOUT_IG_CLIENT_SECRET"] = "test-app-secret"
+        os.environ["SCOUT_IG_REDIRECT_URI"] = "https://kestrel.test/auth/instagram/callback"
         os.environ["SCOUT_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+        os.environ["SCOUT_IG_GRAPH_VERSION"] = "v27.0"
 
     def tearDown(self):
-        for k, v in self.old.items():
-            if v is None:
-                os.environ.pop(k, None)
+        for key, value in self.old.items():
+            if value is None:
+                os.environ.pop(key, None)
             else:
-                os.environ[k] = v
+                os.environ[key] = value
         self.tmp.cleanup()
 
-    def test_oauth_creates_encrypted_user_token_and_revocable_key(self):
-        start = scout_auth.start_url()
-        from urllib.parse import parse_qs, urlparse
-        state = parse_qs(urlparse(start).query)["state"][0]
+    def test_meta_login_stores_encrypted_token_and_disconnects(self):
+        state = "test-state-123456789"
+        url = scout_auth.start_url(state)
+        query = parse_qs(urlparse(url).query)
+        self.assertEqual(query["state"][0], state)
+        self.assertIn("instagram_business_basic", query["scope"][0])
+        self.assertIn("instagram_business_manage_insights", query["scope"][0])
+
         responses = [
-            {"access_token": "short-lived-test-token", "user_id": "ig-123",
+            {"access_token": "short-secret-token", "user_id": "ig-111",
              "permissions": list(scout_auth.SCOPES)},
-            {"access_token": "long-lived-secret-token", "expires_in": 5184000},
-            {"user_id": "ig-123", "username": "creator_test"},
+            {"access_token": "long-secret-token", "expires_in": 5184000},
+            {"user_id": "ig-111", "username": "creator_one"},
         ]
         with mock.patch.object(scout_auth, "_request", side_effect=responses):
-            result = scout_auth.finish("one-time-code", state)
+            account = scout_auth.finish("one-time-meta-code", state)
 
-        self.assertEqual(result["username"], "creator_test")
-        self.assertTrue(scout_auth.authenticate_key(result["mcp_key"]))
-        account = scout_auth.instagram_account(result["user_id"])
-        self.assertEqual(account["token"], "long-lived-secret-token")
-        self.assertEqual(account["api_host"], "graph.instagram.com")
+        self.assertEqual(account["username"], "creator_one")
+        stored = scout_auth.instagram_account(account["user_id"])
+        self.assertEqual(stored["token"], "long-secret-token")
+        self.assertEqual(stored["api_host"], "graph.instagram.com")
+        self.assertEqual(stored["api_version"], "v27.0")
 
-        with open(os.environ["SCOUT_AUTH_DB"], "rb") as f:
-            stored = f.read()
-        self.assertNotIn(b"long-lived-secret-token", stored)
-        self.assertNotIn(b"short-lived-test-token", stored)
+        with open(os.environ["SCOUT_AUTH_DB"], "rb") as handle:
+            raw_db = handle.read()
+        self.assertNotIn(b"long-secret-token", raw_db)
+        self.assertNotIn(b"short-secret-token", raw_db)
 
-        import sqlite3
-        cache = sqlite3.connect(os.environ["SCOUT_DB"])
-        cache.execute("create table cache(k text primary key, v text, exp real)")
-        cache.execute("create table my_profile_users(user_id text, k text, v text, primary key(user_id,k))")
-        cache.execute("insert into my_profile_users values(?,?,?)", (result["user_id"], "niche", "test niche"))
-        cache.commit()
-        cache.close()
+        with self.assertRaises(RuntimeError):
+            scout_auth.finish("replay-code", state)
 
-        scout_auth.disconnect(result["user_id"])
-        cache = sqlite3.connect(os.environ["SCOUT_DB"])
-        self.assertEqual(cache.execute("select count(*) from my_profile_users").fetchone()[0], 0)
-        cache.close()
-        self.assertIsNone(scout_auth.authenticate_key(result["mcp_key"]))
-        self.assertIsNone(scout_auth.instagram_account(result["user_id"]))
+        scout_auth.disconnect(account["user_id"])
+        self.assertIsNone(scout_auth.instagram_account(account["user_id"]))
+        self.assertFalse(scout_auth.connection_status(account["user_id"])["connected"])
 
-    def test_state_is_single_use(self):
-        start = scout_auth.start_url()
-        from urllib.parse import parse_qs, urlparse
-        state = parse_qs(urlparse(start).query)["state"][0]
-        self.assertTrue(scout_auth._consume_state(state))
-        self.assertFalse(scout_auth._consume_state(state))
+    def test_user_cache_files_are_separate(self):
+        import scout_core
+        cache = scout_core.Cache(os.path.join(self.tmp.name, "state.sqlite"))
+        try:
+            scout_core.CALLER.user_id = "tenant-A"
+            cache.put("private", {"value": "A"}, 60)
+            path_a = cache.path + ".users/" + hashlib.sha256(b"tenant-A").hexdigest() + ".sqlite"
+            self.assertTrue(os.path.exists(path_a))
+
+            scout_core.CALLER.user_id = "tenant-B"
+            self.assertIsNone(cache.get("private"))
+            cache.put("private", {"value": "B"}, 60)
+            self.assertEqual(cache.get("private"), {"value": "B"})
+
+            scout_core.CALLER.user_id = "tenant-A"
+            self.assertEqual(cache.get("private"), {"value": "A"})
+        finally:
+            scout_core.CALLER.user_id = None
 
 
 if __name__ == "__main__":
