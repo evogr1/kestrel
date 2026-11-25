@@ -49,7 +49,7 @@ docker build -t kestrel .   # add --build-arg TRANSCRIBE=1 for reel transcriptio
 docker run -d --name kestrel --restart unless-stopped -p 127.0.0.1:8799:8799 --env-file .env -v kestrel-data:/data kestrel
 ```
 
-No Docker? `set -a; . ./.env; set +a; python3 scout_server.py` works too (Python 3.9+, standard library only; `pip install yt-dlp` is recommended).
+No Docker? `set -a; . ./.env; set +a; python3 scout_server.py` works too (Python 3.9+; install `yt-dlp cryptography` for the recommended runtime and OAuth token encryption).
 
 Then put it behind HTTPS and add a custom connector in Claude with the URL:
 
