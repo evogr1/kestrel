@@ -215,6 +215,111 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     return
                 except Exception as e:
                     return self._send(400, {"error": "invalid_request", "error_description": str(e)})
+            if u.path == "/auth/instagram/callback" and verb == "GET":
+                q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+                try:
+                    target = scout_oauth.meta_callback(
+                        (q.get("code") or [""])[0].rstrip("#_"),
+                        (q.get("state") or [""])[0],
+                        error=(q.get("error") or [None])[0],
+                    )
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    return
+                except Exception as e:
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+            if u.path in ("/token", "/revoke") and verb == "POST":
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "invalid_request"})
+                raw = self.rfile.read(n).decode("utf8") if n else ""
+                payload = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+                try:
+                    result = scout_oauth.token(payload) if u.path == "/token" else scout_oauth.revoke(payload)
+                    return self._send(200, result)
+                except Exception as e:
+                    return self._send(400, {
+                        "error": "invalid_grant" if u.path == "/token" else "invalid_request",
+                        "error_description": str(e),
+                    })
+            if u.path == "/account/status" and verb == "GET":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid_token"})
+                return self._send(200, scout_auth.connection_status(user_id))
+            if u.path == "/account/disconnect" and verb == "POST":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid_token"})
+                result = scout_auth.disconnect(user_id)
+                scout_oauth.revoke_user(user_id)
+                return self._send(200, result)
+            if u.path == "/mcp":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    body = json.dumps({"error": "unauthorized"}).encode("utf8")
+                    self.send_response(401)
+                    challenge = 'Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp", scope="kestrel"' % scout_oauth.issuer()
+                    if raw_token:
+                        challenge = challenge[:-1] + ', error="invalid_token"'
+                    self.send_header("WWW-Authenticate", challenge)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                scout_core.CALLER.name = "mcp"
+                scout_core.CALLER.user_id = user_id
+                try:
+                    if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
+                        return self._sse_list_changed()
+                    if verb != "POST":
+                        return self._send(405, {"error": "use POST"})
+                    n = _clen(self.headers.get("Content-Length"))
+                    if n > MAX_BODY:
+                        return self._send(413, {"error": "body too large"})
+                    try:
+                        msg = json.loads(self.rfile.read(n).decode("utf8") or "{}")
+                    except (ValueError, UnicodeDecodeError):
+                        return self._send(400, {"error": "body must be JSON"})
+                    if not isinstance(msg, (dict, list)):
+                        return self._send(400, {"error": "body must be a JSON-RPC object or batch"})
+                    out = [scout_remote_mcp.handle(scout, ROUTES, _conv, item)
+                           for item in (msg if isinstance(msg, list) else [msg])]
+                    out = [item for item in out if item is not None]
+                    if not out:
+                        self.send_response(202)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    return self._send(200, out if isinstance(msg, list) else out[0])
+                finally:
+                    scout_core.CALLER.user_id = None
+                    scout_core.CALLER.name = None
+            if u.path in ("/connect", "/connect/") and verb == "GET":
+                b = scout_connect.page(scout_connect.public_url()).encode("utf8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                return self.wfile.write(b)
             if u.path in scout_legal.PAGES and verb == "GET":
                 b = scout_legal.PAGES[u.path]().encode("utf8")
                 self.send_response(200)
