@@ -6,11 +6,30 @@ ROUTES table the REST API uses, so there is no second copy of any logic and no k
 import json
 import os
 
-from scout_core import ScoutError
+from scout_core import ScoutError, CALLER
 from scout_mcp import TOOLS, REQUIRED, GATEWAY_NOTE, SETUP_NOTE, UI, catalog, tool_list, filter_catalog, ui_meta
 import scout_showcase
 
 MAX_CHARS = 60000
+
+# These endpoints use the server operator's YouTube or Facebook OAuth credentials.
+# They must not be exposed to independently authenticated Kestrel tenants until those
+# integrations have their own per-user OAuth token stores.
+TENANT_BLOCKED_ROUTES = {
+    "/v1/me/channels", "/v1/me/race", "/v1/me/scorecard",
+    "/v1/me/achievements", "/v1/me/audience", "/v1/me/retention",
+    "/v1/me/live", "/v1/me/reach", "/v1/me/reach/sync",
+    "/v1/me/fb", "/v1/me/fb/pages",
+}
+
+
+def _catalog_for_caller():
+    rows = catalog()
+    if not getattr(CALLER, "user_id", None):
+        return rows
+    return [row for row in rows if row["route"] not in TENANT_BLOCKED_ROUTES]
+
+
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 
@@ -51,12 +70,12 @@ def handle(scout, routes, conv, msg):
         return _result(i, {"contents": [{"uri": uri, "mimeType": scout_showcase.APP_MIME, "text": page,
                                          "_meta": {"ui": {"csp": scout_showcase.APP_CSP, "prefersBorder": False}}}]})
     if method == "tools/list":
-        return _result(i, {"tools": tool_list(catalog())})
+        return _result(i, {"tools": tool_list(_catalog_for_caller())})
     if method == "tools/call":
         p = msg.get("params") or {}
         name, raw = p.get("name"), p.get("arguments") or {}
         if name == "kestrel_tools":
-            return _result(i, {"content": [{"type": "text", "text": json.dumps({"tools": filter_catalog(catalog(), raw.get("search")),
+            return _result(i, {"content": [{"type": "text", "text": json.dumps({"tools": filter_catalog(_catalog_for_caller(), raw.get("search")),
                                                                                 "note": GATEWAY_NOTE})}], "isError": False})
         if name == "kestrel_call":
             name, raw = raw.get("tool"), raw.get("args") or {}
@@ -64,6 +83,10 @@ def handle(scout, routes, conv, msg):
         if not tool:
             return _result(i, {"content": [{"type": "text", "text": json.dumps({"error": "no Kestrel tool called %s. Call kestrel_tools for the list." % name})}],
                                "isError": True})
+        if getattr(CALLER, "user_id", None) and tool[1] in TENANT_BLOCKED_ROUTES:
+            return _result(i, {"content": [{"type": "text", "text": json.dumps({
+                "error": "This tool uses the server operator's private account credentials and is disabled for multi-user Kestrel sessions."
+            })}], "isError": True})
         _, want, spec = routes[tool[1]]
         method_name = routes[tool[1]][0]
         args = {k: v for k, v in raw.items() if v not in (None, "")}
