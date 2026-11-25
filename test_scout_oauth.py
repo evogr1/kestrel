@@ -49,6 +49,7 @@ class KestrelOAuthTests(unittest.TestCase):
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
         })
+        self.assertIsInstance(registered["client_id_issued_at"], int)
         verifier = "x" * 48
         original_state = "client-state-" + ig_user_id
         params = {
@@ -63,6 +64,8 @@ class KestrelOAuthTests(unittest.TestCase):
         }
         consent = scout_oauth.prepare_authorization(params)
         self.assertEqual(consent["client_name"], "Test MCP client")
+        page = scout_oauth.consent_page(consent)
+        self.assertIn("unverified application-provided name", page)
         meta_url = scout_oauth.accept_consent(consent["consent_token"])
         with self.assertRaises(ValueError):
             scout_oauth.accept_consent(consent["consent_token"])
