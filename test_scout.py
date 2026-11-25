@@ -1198,11 +1198,22 @@ class RemoteMcpTests(ServerV2):
 
     @classmethod
     def setUpClass(cls):
+        cls.old_allow_shared = os.environ.get("SCOUT_ALLOW_SHARED_MCP")
+        os.environ["SCOUT_ALLOW_SHARED_MCP"] = "1"  # explicit opt-in for legacy compatibility tests only
         cls.tmp = tempfile.mkdtemp()
         cls.scout = make_plus(cls.tmp, FakeYT2(drain_uploads()))
         cls.srv = scout_server.make_server(cls.scout, cls.KEY, "127.0.0.1", 0, cls.SECRET)
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        if cls.old_allow_shared is None:
+            os.environ.pop("SCOUT_ALLOW_SHARED_MCP", None)
+        else:
+            os.environ["SCOUT_ALLOW_SHARED_MCP"] = cls.old_allow_shared
 
     def rpc(self, msg, secret=None):
         r = urllib.request.Request("http://127.0.0.1:%d/mcp/%s" % (self.port, secret or self.SECRET),
