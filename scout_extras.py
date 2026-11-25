@@ -204,6 +204,21 @@ class Kestrel(Growth, ScoutPlus):
         self._growth_tables()
         self._post = _post_json
 
+    def ig_disconnect(self):
+        """Revoke this Kestrel user's Instagram connection and all Kestrel MCP tokens for the identity."""
+        from scout_core import CALLER, ScoutError
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            raise ScoutError("Instagram disconnect requires an authenticated Kestrel OAuth session.", 401)
+        import scout_auth
+        import scout_oauth
+        result = scout_auth.disconnect(user_id)
+        scout_oauth.revoke_user(user_id)
+        return {
+            "disconnected": bool(result.get("disconnected")),
+            "note": "Instagram credentials were removed from Kestrel and all Kestrel OAuth sessions were revoked. Remove the Kestrel connector from your AI client if you no longer need it.",
+        }
+
     # ------------------------------------------------------------ ranked, deduped feed
     def ranked(self, day=None, niche=None, kind=None, limit=60):
         f = self.feed(day=day, niche=niche, kind=kind, limit=1000)
