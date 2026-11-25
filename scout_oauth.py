@@ -6,6 +6,7 @@ to the MCP client. Meta access tokens never leave Kestrel.
 """
 import base64
 import hashlib
+import html
 import hmac
 import json
 import os
@@ -40,6 +41,11 @@ def _db():
     db.execute("""create table if not exists oauth_clients (
         client_id text primary key, client_name text not null, redirect_uris text not null,
         created_at real not null, token_endpoint_auth_method text not null
+    )""")
+    db.execute("""create table if not exists oauth_pending (
+        csrf_hash text primary key, client_id text not null, redirect_uri text not null,
+        client_state text not null, code_challenge text not null, resource text not null,
+        scope text not null, created_at real not null
     )""")
     db.execute("""create table if not exists oauth_transactions (
         state_hash text primary key, client_id text not null, redirect_uri text not null,
@@ -150,7 +156,8 @@ def _pkce(verifier):
     return _b64url(hashlib.sha256(verifier.encode("ascii", "strict")).digest())
 
 
-def begin(params):
+def prepare_authorization(params):
+    """Validate an authorization request and return a one-time consent form."""
     client_id = params.get("client_id")
     redirect_uri = params.get("redirect_uri")
     client_state = params.get("state")
@@ -169,7 +176,8 @@ def begin(params):
     db = _db()
     try:
         client = db.execute(
-            "select redirect_uris from oauth_clients where client_id=?", (client_id,)
+            "select client_name,redirect_uris from oauth_clients where client_id=?",
+            (client_id,),
         ).fetchone()
     finally:
         db.close()
@@ -180,20 +188,85 @@ def begin(params):
     requested = set((params.get("scope") or "kestrel offline_access").split())
     if not requested or not requested.issubset(ALLOWED_SCOPES) or "kestrel" not in requested:
         raise ValueError("Unsupported OAuth scope")
+    csrf_token = secrets.token_urlsafe(32)
+    db = _db()
+    try:
+        now = time.time()
+        db.execute(
+            "insert into oauth_pending values(?,?,?,?,?,?,?,?)",
+            (hashlib.sha256(csrf_token.encode()).hexdigest(), client_id, redirect_uri,
+             client_state, challenge, resource, " ".join(sorted(requested)), now),
+        )
+        db.execute("delete from oauth_pending where created_at < ?", (now - 900,))
+        db.commit()
+    finally:
+        db.close()
+    return {
+        "consent_token": csrf_token,
+        "client_name": client["client_name"],
+        "scopes": sorted(requested),
+        "instagram_scopes": list(scout_auth.SCOPES),
+    }
+
+
+def consent_page(consent):
+    client = html.escape(consent["client_name"])
+    token = html.escape(consent["consent_token"], quote=True)
+    names = ", ".join(html.escape(x) for x in consent["instagram_scopes"])
+    scope = ", ".join(html.escape(x) for x in consent["scopes"])
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>Authorize {client} with Kestrel</title>
+<style>body{{margin:0;background:#0b1018;color:#f3f5f8;font:16px/1.6 system-ui}}main{{max-width:620px;margin:8vh auto;padding:24px}}
+section{{background:#141d2a;border:1px solid #29384d;border-radius:14px;padding:24px}}h1{{line-height:1.1}}
+p,li{{color:#c5cedb}}button{{background:#4d9cff;color:#06101d;border:0;border-radius:9px;padding:13px 18px;font-weight:700;font-size:16px;cursor:pointer}}
+small{{color:#8996a8}}</style></head><body><main><p>K E S T R E L</p><section>
+<h1>Connect your Instagram account?</h1>
+<p><b>{client}</b> is requesting access through Kestrel.</p>
+<p>When you continue, Kestrel will let this AI client use data from the Instagram professional account you authorize, including your profile, media and available account/content insights.</p>
+<p><b>Instagram permissions requested:</b> {names}</p>
+<p><b>Kestrel access:</b> {scope}</p>
+<p>Your Instagram password and Meta access token are not shared with the AI client. The token stays encrypted on Kestrel's server. You can revoke this connection at any time from your connector settings or Instagram's app permissions.</p>
+<form method="post" action="/authorize">
+<input type="hidden" name="consent_token" value="{token}">
+<button type="submit">Continue to Instagram</button>
+</form>
+<p><small>Only continue if you recognize this AI client and expect it to analyse your account.</small></p>
+</section></main></body></html>"""
+
+
+def accept_consent(csrf_token):
+    if not csrf_token or len(csrf_token) > 256:
+        raise ValueError("Consent expired. Start the connector sign-in again.")
+    digest = hashlib.sha256(csrf_token.encode()).hexdigest()
+    db = _db()
+    try:
+        db.execute("begin immediate")
+        row = db.execute(
+            "select * from oauth_pending where csrf_hash=?", (digest,)
+        ).fetchone()
+        db.execute("delete from oauth_pending where csrf_hash=?", (digest,))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    if not row or time.time() - row["created_at"] > 900:
+        raise ValueError("Consent expired. Start the connector sign-in again.")
     state = secrets.token_urlsafe(32)
     db = _db()
     try:
         db.execute(
             "insert into oauth_transactions values(?,?,?,?,?,?,?,?)",
-            (hashlib.sha256(state.encode()).hexdigest(), client_id, redirect_uri,
-             client_state, challenge, resource, " ".join(sorted(requested)), time.time()),
+            (hashlib.sha256(state.encode()).hexdigest(), row["client_id"],
+             row["redirect_uri"], row["client_state"], row["code_challenge"],
+             row["resource"], row["scope"], time.time()),
         )
-        db.execute("delete from oauth_transactions where created_at < ?", (time.time() - 900,))
         db.commit()
     finally:
         db.close()
     return scout_auth.start_url(state)
-
 
 def _append_query(uri, values):
     parsed = urllib.parse.urlsplit(uri)
