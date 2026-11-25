@@ -127,6 +127,8 @@ def register(payload):
         raise ValueError("Kestrel supports public OAuth clients using authorization_code and PKCE")
     client_id = secrets.token_urlsafe(24)
     client_name = str(payload.get("client_name") or "MCP client")[:120]
+    if not client_name.strip():
+        client_name = "MCP client"
     db = _db()
     try:
         db.execute(
@@ -138,6 +140,7 @@ def register(payload):
         db.close()
     return {
         "client_id": client_id,
+        "client_id_issued_at": int(time.time()),
         "client_name": client_name,
         "redirect_uris": redirects,
         "grant_types": ["authorization_code", "refresh_token"],
@@ -222,7 +225,7 @@ section{{background:#141d2a;border:1px solid #29384d;border-radius:14px;padding:
 p,li{{color:#c5cedb}}button{{background:#4d9cff;color:#06101d;border:0;border-radius:9px;padding:13px 18px;font-weight:700;font-size:16px;cursor:pointer}}
 small{{color:#8996a8}}</style></head><body><main><p>K E S T R E L</p><section>
 <h1>Connect your Instagram account?</h1>
-<p><b>{client}</b> is requesting access through Kestrel.</p>
+<p>The unverified application-provided name is <b>{client}</b>. This name is not independently verified by Kestrel.</p>
 <p>When you continue, Kestrel will let this AI client use data from the Instagram professional account you authorize, including your profile, media and available account/content insights.</p>
 <p><b>Instagram permissions requested:</b> {names}</p>
 <p><b>Kestrel access:</b> {scope}</p>
