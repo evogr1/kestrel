@@ -142,48 +142,95 @@ def parse_channel_ref(ref):
 # ---------------------------------------------------------------- cache and usage
 
 class Cache:
+    """SQLite cache with one isolated database per authenticated Kestrel user.
+
+    Public research responses are cached per user as well as private workspace state.
+    This intentionally favours tenant isolation over cross-user cache sharing.
+    """
+
     def __init__(self, path):
-        d = os.path.dirname(path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        self.db = sqlite3.connect(path, check_same_thread=False, timeout=30)
-        self.lock = threading.Lock()
-        with self.lock:
-            self.db.execute("pragma journal_mode=wal")
-            self.db.execute("create table if not exists cache(k text primary key, v text, exp real)")
-            self.db.execute("create table if not exists usage(day text, name text, n integer, primary key(day, name))")
-            self.db.commit()
+        self.path = path
+        self.lock = threading.RLock()
+        self._local = threading.local()
+        self._base_db = self._open_db(path)
+
+    @staticmethod
+    def _open_db(path):
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
+        db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        db.execute("pragma busy_timeout=30000")
+        db.execute("pragma journal_mode=WAL")
+        db.execute("create table if not exists cache(k text primary key, v text, exp real)")
+        db.execute("create table if not exists usage(day text, name text, n integer, primary key(day, name))")
+        db.commit()
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return db
+
+    @property
+    def db(self):
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            return self._base_db
+        connections = getattr(self._local, "connections", None)
+        if connections is None:
+            connections = {}
+            self._local.connections = connections
+        digest = hashlib.sha256(str(user_id).encode("utf8")).hexdigest()
+        if digest not in connections:
+            directory = self.path + ".users"
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
+            connections[digest] = self._open_db(os.path.join(directory, digest + ".sqlite"))
+        return connections[digest]
 
     def get(self, k):
         with self.lock:
-            r = self.db.execute("select v, exp from cache where k=?", (k,)).fetchone()
-        if r and r[1] > time.time():
-            return json.loads(r[0])
+            row = self.db.execute("select v, exp from cache where k=?", (k,)).fetchone()
+        if row and row[1] > time.time():
+            return json.loads(row[0])
         return None
 
     def put(self, k, v, ttl):
         with self.lock:
-            self.db.execute("insert or replace into cache values(?,?,?)", (k, json.dumps(v), time.time() + ttl))
+            self.db.execute("insert or replace into cache values(?,?,?)",
+                            (k, json.dumps(v), time.time() + ttl))
             self.db.commit()
 
     def cached(self, k, ttl, fn):
-        v = self.get(k)
-        if v is None:
-            v = fn()
-            self.put(k, v, ttl)
-        return v
+        value = self.get(k)
+        if value is None:
+            value = fn()
+            self.put(k, value, ttl)
+        return value
 
     def add_usage(self, name, n):
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            self.db.execute("insert into usage values(?,?,?) on conflict(day,name) do update set n=n+excluded.n", (day, name, n))
+            self.db.execute(
+                "insert into usage values(?,?,?) on conflict(day,name) do update set n=n+excluded.n",
+                (day, name, n),
+            )
             self.db.commit()
 
     def usage(self, name):
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            r = self.db.execute("select n from usage where day=? and name=?", (day, name)).fetchone()
-        return r[0] if r else 0
+            row = self.db.execute(
+                "select n from usage where day=? and name=?", (day, name)
+            ).fetchone()
+        return row[0] if row else 0
 
 
 # ---------------------------------------------------------------- YouTube
