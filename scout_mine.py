@@ -362,9 +362,12 @@ class Mine:
         return _http("https://%s/%s/%s?%s" % (host, version, path, urllib.parse.urlencode(q)))
 
     def _ig_pick(self, account):
-        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
+        # Private account insights must never fall back to the shared Business Discovery pool.
+        if not getattr(CALLER, "user_id", None):
+            raise ScoutError("This operation requires an authenticated Kestrel user. Connect through the /mcp OAuth endpoint.", 401)
+        pool = self.ig.user_pool()
         if not pool:
-            raise ScoutError("No Instagram account is connected to this Kestrel user. Open /connect/ and connect Instagram first.", 401)
+            raise ScoutError("No Instagram account is connected to this Kestrel user. Reconnect Kestrel and authorize Instagram.", 401)
         if not account:
             return pool
         a = account.strip().lstrip("@").lower()
@@ -386,8 +389,10 @@ class Mine:
                                  lambda: self._ig_get(t, t["ig_user_id"], fields="username,name,followers_count,follows_count,media_count"))
 
     def ig_accounts(self):
+        if not getattr(CALLER, "user_id", None):
+            raise ScoutError("This operation requires an authenticated Kestrel user.", 401)
         out = []
-        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
+        pool = self.ig.user_pool()
         for t in pool:
             try:
                 p = self._ig_profile(t)
