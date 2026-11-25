@@ -11,6 +11,8 @@ from cryptography.fernet import Fernet
 
 import scout_auth
 import scout_oauth
+import scout_remote_mcp
+from scout_core import CALLER
 
 
 def challenge(verifier):
@@ -148,6 +150,23 @@ class KestrelOAuthTests(unittest.TestCase):
             scout_oauth.validate_access(token_b["access_token"]),
         )
         self.assertNotEqual(token_a["access_token"], token_b["access_token"])
+
+    def test_tenant_tool_catalog_blocks_operator_owned_accounts(self):
+        CALLER.user_id = "tenant-user"
+        try:
+            names = {row["name"] for row in scout_remote_mcp._catalog_for_caller()}
+            self.assertIn("scout_my_ig", names)
+            self.assertIn("scout_disconnect_instagram", names)
+            self.assertNotIn("scout_my_audience", names)
+            response = scout_remote_mcp.handle(
+                None, {}, None,
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "scout_my_audience", "arguments": {"channel": "operator-channel"}}},
+            )
+            self.assertTrue(response["result"]["isError"])
+            self.assertIn("server operator", response["result"]["content"][0]["text"])
+        finally:
+            CALLER.user_id = None
 
     def test_dcr_rejects_insecure_redirects_and_metadata_advertises_pkce(self):
         with self.assertRaises(ValueError):
