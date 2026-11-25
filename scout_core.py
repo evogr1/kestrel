@@ -58,7 +58,7 @@ class Config:
         self.ig_pool = kw.get("ig_pool", e("SCOUT_IG_POOL", ""))
         self.ig_seeds = kw.get("ig_seeds", e("SCOUT_IG_SEEDS", ""))
         self.ig_stop_pct = int(kw.get("ig_stop_pct", e("SCOUT_IG_STOP_PCT", "80")))
-        self.ig_version = kw.get("ig_version", e("SCOUT_IG_GRAPH_VERSION", "v26.0"))
+        self.ig_version = kw.get("ig_version", e("SCOUT_IG_GRAPH_VERSION", "v27.0"))
 
 
 def _outside_script():
