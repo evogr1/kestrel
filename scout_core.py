@@ -237,18 +237,19 @@ class Cache:
         return value
 
     def add_usage(self, name, n):
+        """Usage counters belong to the shared service/API keys, not to tenant workspaces."""
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            self.db.execute(
+            self._base_db.execute(
                 "insert into usage values(?,?,?) on conflict(day,name) do update set n=n+excluded.n",
                 (day, name, n),
             )
-            self.db.commit()
+            self._base_db.commit()
 
     def usage(self, name):
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            row = self.db.execute(
+            row = self._base_db.execute(
                 "select n from usage where day=? and name=?", (day, name)
             ).fetchone()
         return row[0] if row else 0
