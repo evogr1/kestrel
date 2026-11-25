@@ -12,14 +12,18 @@ import scout_showcase
 
 MAX_CHARS = 60000
 
-# These endpoints use the server operator's YouTube or Facebook OAuth credentials.
-# They must not be exposed to independently authenticated Kestrel tenants until those
-# integrations have their own per-user OAuth token stores.
+# These endpoints use the server operator's own credentials (YouTube or Facebook OAuth, Trello,
+# alert webhook, judge endpoint, paid X API) or run shared bulk jobs. They must not be exposed
+# to independently authenticated Kestrel tenants.
 TENANT_BLOCKED_ROUTES = {
     "/v1/me/channels", "/v1/me/race", "/v1/me/scorecard",
     "/v1/me/achievements", "/v1/me/audience", "/v1/me/retention",
     "/v1/me/live", "/v1/me/reach", "/v1/me/reach/sync",
     "/v1/me/fb", "/v1/me/fb/pages",
+    "/v1/brief", "/v1/brief/push", "/v1/watch", "/v1/me/weekly", "/v1/jobs/daily",
+    "/v1/changes/scan", "/v1/hooks/extract", "/v1/x/profile", "/v1/x/outliers", "/v1/x/search",
+    # These read operator data or report the operator's accounts, tokens and spend.
+    "/v1/social/search", "/v1/setup", "/v1/usage", "/v1/ig/seed_outliers",
 }
 
 
@@ -85,7 +89,7 @@ def handle(scout, routes, conv, msg):
                                "isError": True})
         if getattr(CALLER, "user_id", None) and tool[1] in TENANT_BLOCKED_ROUTES:
             return _result(i, {"content": [{"type": "text", "text": json.dumps({
-                "error": "This tool uses the server operator's private account credentials and is disabled for multi-user Kestrel sessions."
+                "error": "This tool uses the server operator's credentials or shared jobs and is disabled for multi-user Kestrel sessions."
             })}], "isError": True})
         _, want, spec = routes[tool[1]]
         method_name = routes[tool[1]][0]

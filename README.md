@@ -25,6 +25,8 @@ For the hosted Kestrel server, share **https://scout.solodac.com/connect/**. The
 
 The service implements OAuth authorization-code flow with PKCE S256, protected-resource metadata, authorization-server metadata, dynamic client registration, resource/audience checks and rotating refresh tokens. The old shared `SCOUT_MCP_SECRET` path is disabled by default; do not enable `SCOUT_ALLOW_SHARED_MCP` on a multi-user deployment.
 
+Sign-in is bound to the browser that approved the consent page. Only Claude, ChatGPT and loopback callbacks can register; add others in `SCOUT_OAUTH_EXTRA_REDIRECTS`. Tools that use the operator's credentials or run shared jobs are not available to signed-in users.
+
 ## Pick how you run it
 
 ### Option A: Claude Code plugin

@@ -402,7 +402,7 @@ class Growth:
         d = tempfile.mkdtemp()
         try:
             cmd = ["yt-dlp", "-q", "--no-warnings", "--no-playlist", "-f", "ba/b", "-o", os.path.join(d, "a.%(ext)s"), url]
-            if os.environ.get("SCOUT_IG_COOKIES"):
+            if os.environ.get("SCOUT_IG_COOKIES") and not getattr(CALLER, "user_id", None):
                 cmd[1:1] = ["--cookies", os.environ["SCOUT_IG_COOKIES"]]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             files = [f for f in os.listdir(d) if f.startswith("a.") and not f.endswith(".part")]
@@ -778,17 +778,18 @@ class Growth:
         """Start reading my own account in the background (cached 3 h) so it overlaps with the creator's fetch."""
         box = {}
         user_id = getattr(CALLER, "user_id", None)
+        name = getattr(CALLER, "name", None)
 
         def run():
             try:
-                CALLER.user_id = user_id
+                CALLER.user_id, CALLER.name = user_id, name
                 box["v"] = self.cache.cached("myins:%s" % (me or user_id or "default").lower(), 3 * 3600, lambda: self.mine.ig_insights(me, days=28, reels=25))
             except ScoutError as e:
                 box["e"] = str(e)
             except Exception as e:  # never let my side break their breakdown
                 box["e"] = "%s" % type(e).__name__
             finally:
-                CALLER.user_id = None
+                CALLER.user_id = CALLER.name = None
         th = threading.Thread(target=run, daemon=True)
         th.start()
 

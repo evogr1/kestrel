@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scout_core import ScoutError, med, age_days, UA
+from scout_core import ScoutError, med, age_days, UA, CALLER
 
 X_API = "https://api.x.com/2/"
 X_TIMELINE = "https://syndication.twitter.com/srv/timeline-profile/screen-name/"
@@ -114,8 +114,17 @@ def handle(u):
 class X:
     def __init__(self, cache):
         self.cache = cache
-        self.bearer = os.environ.get("X_BEARER_TOKEN", "")
+        self._bearer = os.environ.get("X_BEARER_TOKEN", "")
         self.daily_posts = int(os.environ.get("SCOUT_X_DAILY_POSTS", "1000"))
+
+    @property
+    def bearer(self):
+        """The operator's paid X token. Signed-in tenants never get to spend it."""
+        return "" if getattr(CALLER, "user_id", None) else self._bearer
+
+    @bearer.setter
+    def bearer(self, value):
+        self._bearer = value
 
     @property
     def has_api(self):

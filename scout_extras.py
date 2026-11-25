@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scout_core import ScoutError, med, video_id, age_days
+from scout_core import ScoutError, med, video_id, age_days, CALLER
 from scout_plus import ScoutPlus
 from scout_growth import Growth
 
@@ -282,7 +282,7 @@ class Kestrel(Growth, ScoutPlus):
         for n, items in cands.items():
             rule = rules.get(n, {})
             cap = int(rule.get("per_page", per_page))
-            if items and os.environ.get("SCOUT_JUDGE_URL"):
+            if items and os.environ.get("SCOUT_JUDGE_URL") and not getattr(CALLER, "user_id", None):
                 items, info = self._judge(n, rule, items)
                 judged[n] = info
                 cut += [dict(c, page=n) for c in info.pop("rejected", [])]
@@ -323,6 +323,8 @@ class Kestrel(Growth, ScoutPlus):
         return [it for _, it in keep], {"status": "ok", "scored": len(scores), "kept": len(keep), "rejected": rejected}
 
     def _push_trello(self, pages):
+        if getattr(CALLER, "user_id", None):
+            return {"pushed": 0, "errors": ["Trello push is only available to the server operator"]}
         key, tok = os.environ.get("SCOUT_TRELLO_KEY", ""), os.environ.get("SCOUT_TRELLO_TOKEN", "")
         try:
             lists = json.loads(os.environ.get("SCOUT_TRELLO_LISTS", "{}"))
@@ -348,6 +350,8 @@ class Kestrel(Growth, ScoutPlus):
 
     # ------------------------------------------------------------ 2. early-breakout watch
     def _notify(self, text, items):
+        if getattr(CALLER, "user_id", None):
+            return False
         url = os.environ.get("SCOUT_ALERT_WEBHOOK", "")
         if not url or not items:
             return False

@@ -10,8 +10,10 @@ import html
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
+import threading
 import time
 import urllib.parse
 import uuid
@@ -22,6 +24,33 @@ ACCESS_TTL = 3600
 REFRESH_TTL = 60 * 86400
 AUTH_CODE_TTL = 180
 ALLOWED_SCOPES = {"kestrel", "offline_access"}
+# Hosted AI clients that may receive authorization codes. Anything else must be listed by the
+# operator in SCOUT_OAUTH_EXTRA_REDIRECTS (space separated, exact URLs).
+KNOWN_REDIRECTS = {
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+}
+CHATGPT_CALLBACK = re.compile(r"https://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]+")
+BROWSER_COOKIE = "__Host-kestrel_oauth"
+RATE_LIMIT, RATE_WINDOW = 30, 600
+_HITS = {}
+_HITS_LOCK = threading.Lock()
+
+
+def allow(key, limit=RATE_LIMIT, window=RATE_WINDOW, now=None):
+    """In-memory sliding window for the unauthenticated sign-up endpoints."""
+    now = time.time() if now is None else now
+    with _HITS_LOCK:
+        if len(_HITS) > 10000:
+            for old in [k for k, v in _HITS.items() if v[-1] <= now - window]:
+                del _HITS[old]
+        hits = [t for t in _HITS.get(key, []) if t > now - window]
+        ok = len(hits) < limit
+        if ok:
+            hits.append(now)
+        _HITS[key] = hits
+        return ok
 
 
 def issuer():
@@ -50,8 +79,11 @@ def _db():
     db.execute("""create table if not exists oauth_transactions (
         state_hash text primary key, client_id text not null, redirect_uri text not null,
         client_state text not null, code_challenge text not null, resource text not null,
-        scope text not null, created_at real not null
+        scope text not null, created_at real not null, browser_hash text not null
     )""")
+    if "browser_hash" not in [r[1] for r in db.execute("pragma table_info(oauth_transactions)")]:
+        # Rows without a binding can never match, so any sign-in in flight simply restarts.
+        db.execute("alter table oauth_transactions add column browser_hash text not null default ''")
     db.execute("""create table if not exists oauth_codes (
         code_hash text primary key, client_id text not null, redirect_uri text not null,
         code_challenge text not null, resource text not null, user_id text not null,
@@ -105,7 +137,8 @@ def _valid_redirect(uri):
     if p.fragment or p.username or p.password:
         return False
     if p.scheme == "https":
-        return bool(p.netloc)
+        extra = os.environ.get("SCOUT_OAUTH_EXTRA_REDIRECTS", "").split()
+        return uri in KNOWN_REDIRECTS or uri in extra or bool(CHATGPT_CALLBACK.fullmatch(uri))
     # OAuth native-app loopback redirects are allowed only on literal loopback addresses.
     if p.scheme == "http" and p.hostname in ("127.0.0.1", "::1", "[::1]", "localhost"):
         return bool(p.port)
@@ -119,7 +152,8 @@ def register(payload):
     if not isinstance(redirects, list) or not redirects or len(redirects) > 20:
         raise ValueError("redirect_uris must contain one or more exact callback URLs")
     if not all(_valid_redirect(x) for x in redirects):
-        raise ValueError("Every redirect URI must be HTTPS or a loopback HTTP URL with a port")
+        raise ValueError("Every redirect URI must be a known AI client callback, a URL the operator allowed, "
+                         "or a loopback HTTP URL with a port")
     auth_method = payload.get("token_endpoint_auth_method", "none")
     grants = payload.get("grant_types", ["authorization_code", "refresh_token"])
     response_types = payload.get("response_types", ["code"])
@@ -186,7 +220,7 @@ def prepare_authorization(params):
         db.close()
     if not client:
         raise ValueError("Unknown OAuth client. Register the MCP client first.")
-    if redirect_uri not in json.loads(client["redirect_uris"]):
+    if redirect_uri not in json.loads(client["redirect_uris"]) or not _valid_redirect(redirect_uri):
         raise ValueError("redirect_uri is not registered for this client")
     requested = set((params.get("scope") or "kestrel offline_access").split())
     if not requested or not requested.issubset(ALLOWED_SCOPES) or "kestrel" not in requested:
@@ -207,6 +241,7 @@ def prepare_authorization(params):
     return {
         "consent_token": csrf_token,
         "client_name": client["client_name"],
+        "redirect_uri": redirect_uri,
         "scopes": sorted(requested),
         "instagram_scopes": list(scout_auth.SCOPES),
     }
@@ -217,8 +252,10 @@ def consent_page(consent):
     token = html.escape(consent["consent_token"], quote=True)
     names = ", ".join(html.escape(x) for x in consent["instagram_scopes"])
     scope = ", ".join(html.escape(x) for x in consent["scopes"])
+    target = urllib.parse.urlparse(consent["redirect_uri"])
+    destination = html.escape(target.scheme + "://" + target.netloc)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="same-origin">
 <title>Authorize {client} with Kestrel</title>
 <style>body{{margin:0;background:#0b1018;color:#f3f5f8;font:16px/1.6 system-ui}}main{{max-width:620px;margin:8vh auto;padding:24px}}
 section{{background:#141d2a;border:1px solid #29384d;border-radius:14px;padding:24px}}h1{{line-height:1.1}}
@@ -226,6 +263,7 @@ p,li{{color:#c5cedb}}button{{background:#4d9cff;color:#06101d;border:0;border-ra
 small{{color:#8996a8}}</style></head><body><main><p>K E S T R E L</p><section>
 <h1>Connect your Instagram account?</h1>
 <p>The unverified application-provided name is <b>{client}</b>. This name is not independently verified by Kestrel.</p>
+<p>Access will be sent to: <b>{destination}</b></p>
 <p>When you continue, Kestrel will let this AI client use data from the Instagram professional account you authorize, including your profile, media and available account/content insights.</p>
 <p><b>Instagram permissions requested:</b> {names}</p>
 <p><b>Kestrel access:</b> {scope}</p>
@@ -239,6 +277,7 @@ small{{color:#8996a8}}</style></head><body><main><p>K E S T R E L</p><section>
 
 
 def accept_consent(csrf_token):
+    """Returns (Instagram URL, browser binding). The caller must set the binding as a cookie."""
     if not csrf_token or len(csrf_token) > 256:
         raise ValueError("Consent expired. Start the connector sign-in again.")
     digest = hashlib.sha256(csrf_token.encode()).hexdigest()
@@ -258,18 +297,20 @@ def accept_consent(csrf_token):
     if not row or time.time() - row["created_at"] > 900:
         raise ValueError("Consent expired. Start the connector sign-in again.")
     state = secrets.token_urlsafe(32)
+    binding = secrets.token_urlsafe(32)
     db = _db()
     try:
         db.execute(
-            "insert into oauth_transactions values(?,?,?,?,?,?,?,?)",
+            "insert into oauth_transactions values(?,?,?,?,?,?,?,?,?)",
             (hashlib.sha256(state.encode()).hexdigest(), row["client_id"],
              row["redirect_uri"], row["client_state"], row["code_challenge"],
-             row["resource"], row["scope"], time.time()),
+             row["resource"], row["scope"], time.time(),
+             hashlib.sha256(binding.encode()).hexdigest()),
         )
         db.commit()
     finally:
         db.close()
-    return scout_auth.start_url(state)
+    return scout_auth.start_url(state), binding
 
 def _append_query(uri, values):
     parsed = urllib.parse.urlsplit(uri)
@@ -279,7 +320,7 @@ def _append_query(uri, values):
                                     urllib.parse.urlencode(query), parsed.fragment))
 
 
-def meta_callback(code, state, error=None):
+def meta_callback(code, state, error=None, binding=None):
     if not state or len(state) > 256:
         raise ValueError("Invalid OAuth state")
     digest = hashlib.sha256(state.encode()).hexdigest()
@@ -298,6 +339,10 @@ def meta_callback(code, state, error=None):
         db.close()
     if not row or time.time() - row["created_at"] > 900:
         raise ValueError("This sign-in expired. Start again from your MCP client.")
+    # Only the browser that approved the consent page may finish the sign-in.
+    if not binding or not hmac.compare_digest(
+            hashlib.sha256(binding.encode()).hexdigest(), row["browser_hash"]):
+        raise ValueError("This sign-in was started in a different browser. Start again from your MCP client.")
     if error:
         return _append_query(row["redirect_uri"], {
             "error": "access_denied",

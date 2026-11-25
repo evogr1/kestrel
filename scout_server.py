@@ -188,6 +188,12 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 return self._send(200, scout_oauth.authorization_server_metadata())
             if u.path in ("/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource") and verb == "GET":
                 return self._send(200, scout_oauth.protected_resource_metadata())
+            if u.path in ("/register", "/authorize"):
+                forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
+                bucket = "%s %s %s" % (verb, u.path, forwarded or self.client_address[0])
+                if not scout_oauth.allow(bucket):
+                    return self._send(429, {"error": "temporarily_unavailable",
+                                            "error_description": "Too many sign-in requests. Try again later."})
             if u.path == "/register" and verb == "POST":
                 n = _clen(self.headers.get("Content-Length"))
                 if n > MAX_BODY:
@@ -212,8 +218,11 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
                     self.send_header("Cache-Control", "no-store")
-                    self.send_header("Referrer-Policy", "no-referrer")
-                    self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+                    self.send_header("Referrer-Policy", "same-origin")
+                    target = urllib.parse.urlparse(consent["redirect_uri"])
+                    self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "
+                                     "form-action 'self' https://www.instagram.com %s://%s; base-uri 'none'; "
+                                     "frame-ancestors 'none'" % (target.scheme, target.netloc))
                     self.send_header("X-Content-Type-Options", "nosniff")
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
@@ -231,9 +240,11 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 raw = self.rfile.read(n).decode("utf8") if n else ""
                 form = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
                 try:
-                    target = scout_oauth.accept_consent(form.get("consent_token", ""))
+                    target, binding = scout_oauth.accept_consent(form.get("consent_token", ""))
                     self.send_response(302)
                     self.send_header("Location", target)
+                    self.send_header("Set-Cookie", "%s=%s; Path=/; Max-Age=900; Secure; HttpOnly; SameSite=Lax"
+                                     % (scout_oauth.BROWSER_COOKIE, binding))
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Referrer-Policy", "no-referrer")
                     self.end_headers()
@@ -248,14 +259,19 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     return self.wfile.write(b)
             if u.path == "/auth/instagram/callback" and verb == "GET":
                 q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+                cookies = dict(part.strip().split("=", 1) for part in (self.headers.get("Cookie") or "").split(";")
+                               if "=" in part)
                 try:
                     target = scout_oauth.meta_callback(
                         (q.get("code") or [""])[0].rstrip("#_"),
                         (q.get("state") or [""])[0],
                         error=(q.get("error") or [None])[0],
+                        binding=cookies.get(scout_oauth.BROWSER_COOKIE),
                     )
                     self.send_response(302)
                     self.send_header("Location", target)
+                    self.send_header("Set-Cookie", "%s=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+                                     % scout_oauth.BROWSER_COOKIE)
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Referrer-Policy", "no-referrer")
                     self.end_headers()
