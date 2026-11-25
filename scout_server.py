@@ -186,12 +186,13 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             # MCP OAuth metadata: clients discover the protected resource first, then its authorization server.
             if u.path == "/.well-known/oauth-authorization-server" and verb == "GET":
                 return self._send(200, scout_oauth.authorization_server_metadata())
-            if u.path in ("/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource") and verb == "GET":
+            if u.path in ("/.well-known/oauth-protected-resource/mcp",) and verb == "GET":
                 return self._send(200, scout_oauth.protected_resource_metadata())
             if u.path in ("/register", "/authorize"):
-                forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip()
-                bucket = "%s %s %s" % (verb, u.path, forwarded or self.client_address[0])
-                if not scout_oauth.allow(bucket):
+                visitor = scout_oauth.client_ip(self.client_address[0], self.headers)
+                endpoint = "%s %s" % (verb, u.path)
+                if not (scout_oauth.allow(endpoint + " " + visitor)
+                        and scout_oauth.allow(endpoint, limit=scout_oauth.GLOBAL_LIMIT)):
                     return self._send(429, {"error": "temporarily_unavailable",
                                             "error_description": "Too many sign-in requests. Try again later."})
             if u.path == "/register" and verb == "POST":
@@ -374,7 +375,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 return self.wfile.write(b)
-            if mcp_secret and os.environ.get("SCOUT_ALLOW_SHARED_MCP") == "1" and u.path.startswith("/mcp/"):
+            if mcp_secret and os.environ.get("SCOUT_ALLOW_SHARED_MCP", "1") != "0" and u.path.startswith("/mcp/"):
                 if not hmac.compare_digest(u.path[5:].strip("/").encode(), mcp_secret.encode()):
                     return self._send(404, {"error": "not found"})
                 if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):

@@ -290,6 +290,8 @@ class YouTube:
 
     # ---- low level
     def api(self, endpoint, units, **params):
+        if getattr(CALLER, "user_id", None):
+            raise ScoutError("YouTube research uses the server operator's quota and is not available to signed-in users.", 403)
         for _ in range(len(self.cfg.yt_keys) or 1):
             pick = self._key_for(units)
             if not pick:
@@ -571,6 +573,8 @@ class Instagram:
         self.cfg, self.cache = cfg, cache
 
     def pool(self):
+        if getattr(CALLER, "user_id", None):
+            return []   # the shared discovery pool belongs to the operator
         if os.environ.get("SCOUT_IG_TOKEN") and os.environ.get("SCOUT_IG_USER_ID"):
             return [{"label": os.environ.get("SCOUT_IG_APP", "default"), "token": os.environ["SCOUT_IG_TOKEN"],
                      "ig_user_id": os.environ["SCOUT_IG_USER_ID"]}]

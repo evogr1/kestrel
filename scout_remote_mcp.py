@@ -12,26 +12,25 @@ import scout_showcase
 
 MAX_CHARS = 60000
 
-# These endpoints use the server operator's own credentials (YouTube or Facebook OAuth, Trello,
-# alert webhook, judge endpoint, paid X API) or run shared bulk jobs. They must not be exposed
-# to independently authenticated Kestrel tenants.
-TENANT_BLOCKED_ROUTES = {
-    "/v1/me/channels", "/v1/me/race", "/v1/me/scorecard",
-    "/v1/me/achievements", "/v1/me/audience", "/v1/me/retention",
-    "/v1/me/live", "/v1/me/reach", "/v1/me/reach/sync",
-    "/v1/me/fb", "/v1/me/fb/pages",
-    "/v1/brief", "/v1/brief/push", "/v1/watch", "/v1/me/weekly", "/v1/jobs/daily",
-    "/v1/changes/scan", "/v1/hooks/extract", "/v1/x/profile", "/v1/x/outliers", "/v1/x/search",
-    # These read operator data or report the operator's accounts, tokens and spend.
-    "/v1/social/search", "/v1/setup", "/v1/usage", "/v1/ig/seed_outliers",
+# Signed-in users get only tools that run on their own Instagram token and their own database.
+# Everything else spends the operator's API quota, server or accounts. Default is closed:
+# a new route is unavailable to users until it is added here.
+TENANT_ALLOWED_ROUTES = {
+    "/v1/me/ig", "/v1/me/ig/disconnect", "/v1/me/postmortem", "/v1/me/besttime",
+    "/v1/me/profile", "/v1/me/profile/set",
+    "/v1/watchlist", "/v1/watchlist/add", "/v1/watchlist/remove",
 }
+
+
+USER_NOTE = ("These tools read the signed-in user's own Instagram account: insights, post reviews, best posting time, "
+             "profile and a saved creator list. Research tools are not available on this connection.")
 
 
 def _catalog_for_caller():
     rows = catalog()
     if not getattr(CALLER, "user_id", None):
         return rows
-    return [row for row in rows if row["route"] not in TENANT_BLOCKED_ROUTES]
+    return [row for row in rows if row["route"] in TENANT_ALLOWED_ROUTES]
 
 
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -58,7 +57,7 @@ def handle(scout, routes, conv, msg):
                            "capabilities": {"tools": {"listChanged": True}, "resources": {},
                                             "extensions": {"io.modelcontextprotocol/ui": {}}},
                            "serverInfo": {"name": "kestrel", "version": "1.4.0"},
-                           "instructions": SETUP_NOTE + GATEWAY_NOTE})
+                           "instructions": USER_NOTE if getattr(CALLER, "user_id", None) else SETUP_NOTE + GATEWAY_NOTE})
     if method == "ping":
         return _result(i, {})
     if method == "resources/list":
@@ -87,9 +86,9 @@ def handle(scout, routes, conv, msg):
         if not tool:
             return _result(i, {"content": [{"type": "text", "text": json.dumps({"error": "no Kestrel tool called %s. Call kestrel_tools for the list." % name})}],
                                "isError": True})
-        if getattr(CALLER, "user_id", None) and tool[1] in TENANT_BLOCKED_ROUTES:
+        if getattr(CALLER, "user_id", None) and tool[1] not in TENANT_ALLOWED_ROUTES:
             return _result(i, {"content": [{"type": "text", "text": json.dumps({
-                "error": "This tool uses the server operator's credentials or shared jobs and is disabled for multi-user Kestrel sessions."
+                "error": "This tool uses the server operator's quota or accounts and is not available to signed-in users."
             })}], "isError": True})
         _, want, spec = routes[tool[1]]
         method_name = routes[tool[1]][0]

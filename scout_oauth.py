@@ -8,6 +8,7 @@ import base64
 import hashlib
 import html
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -34,6 +35,9 @@ KNOWN_REDIRECTS = {
 CHATGPT_CALLBACK = re.compile(r"https://chatgpt\.com/connector/oauth/[A-Za-z0-9_-]+")
 BROWSER_COOKIE = "__Host-kestrel_oauth"
 RATE_LIMIT, RATE_WINDOW = 30, 600
+GLOBAL_LIMIT = 300      # ceiling for one endpoint across all addresses
+MAX_BUCKETS = 10000
+CONSENT_TTL = 600
 _HITS = {}
 _HITS_LOCK = threading.Lock()
 
@@ -42,14 +46,15 @@ def allow(key, limit=RATE_LIMIT, window=RATE_WINDOW, now=None):
     """In-memory sliding window for the unauthenticated sign-up endpoints."""
     now = time.time() if now is None else now
     with _HITS_LOCK:
-        if len(_HITS) > 10000:
-            for old in [k for k, v in _HITS.items() if v[-1] <= now - window]:
-                del _HITS[old]
+        if key not in _HITS:
+            while len(_HITS) >= MAX_BUCKETS:
+                del _HITS[next(iter(_HITS))]     # oldest bucket first
         hits = [t for t in _HITS.get(key, []) if t > now - window]
         ok = len(hits) < limit
         if ok:
             hits.append(now)
-        _HITS[key] = hits
+        _HITS.pop(key, None)
+        _HITS[key] = hits       # most recently used last, so busy buckets are not evicted
         return ok
 
 
@@ -101,6 +106,19 @@ def _db():
     )""")
     db.commit()
     return db
+
+
+def client_ip(peer, headers):
+    """The visitor's address. A forwarding header counts only when the socket peer is a trusted proxy."""
+    trusted = os.environ.get("SCOUT_TRUSTED_PROXIES", "127.0.0.0/8 ::1/128").replace(",", " ").split()
+    try:
+        address = ipaddress.ip_address(peer)
+        if not any(address in ipaddress.ip_network(net, strict=False) for net in trusted):
+            return peer
+        name = os.environ.get("SCOUT_CLIENT_IP_HEADER", "CF-Connecting-IP")
+        return str(ipaddress.ip_address((headers.get(name) or "").strip()))
+    except ValueError:
+        return peer
 
 
 def authorization_server_metadata():
@@ -234,7 +252,7 @@ def prepare_authorization(params):
             (hashlib.sha256(csrf_token.encode()).hexdigest(), client_id, redirect_uri,
              client_state, challenge, resource, " ".join(sorted(requested)), now),
         )
-        db.execute("delete from oauth_pending where created_at < ?", (now - 900,))
+        db.execute("delete from oauth_pending where created_at < ?", (now - CONSENT_TTL,))
         db.commit()
     finally:
         db.close()
@@ -268,6 +286,7 @@ small{{color:#8996a8}}</style></head><body><main><p>K E S T R E L</p><section>
 <p><b>Instagram permissions requested:</b> {names}</p>
 <p><b>Kestrel access:</b> {scope}</p>
 <p>Your Instagram password and Meta access token are not shared with the AI client. The token stays encrypted on Kestrel's server. You can revoke this connection at any time from your connector settings or Instagram's app permissions.</p>
+<p><b>Did someone send you this page or a link to it? Close it.</b> Continue only if you have just pressed Connect in your own AI app. Whoever started this sign-in can read your Instagram data.</p>
 <form method="post" action="/authorize">
 <input type="hidden" name="consent_token" value="{token}">
 <button type="submit">Continue to Instagram</button>
@@ -294,7 +313,7 @@ def accept_consent(csrf_token):
         raise
     finally:
         db.close()
-    if not row or time.time() - row["created_at"] > 900:
+    if not row or time.time() - row["created_at"] > CONSENT_TTL:
         raise ValueError("Consent expired. Start the connector sign-in again.")
     state = secrets.token_urlsafe(32)
     binding = secrets.token_urlsafe(32)
@@ -496,7 +515,10 @@ def validate_access(raw_token):
                where token_hash=? and resource=? and revoked_at is null and expires_at>?""",
             (hashlib.sha256(raw_token.encode()).hexdigest(), resource_uri(), time.time()),
         ).fetchone()
-        return row["user_id"] if row else None
+        if not row:
+            return None
+        user = db.execute("select ig_user_id from auth_users where user_id=?", (row["user_id"],)).fetchone()
+        return row["user_id"] if user and scout_auth.is_invited(user["ig_user_id"]) else None
     finally:
         db.close()
 

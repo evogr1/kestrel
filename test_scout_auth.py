@@ -17,7 +17,7 @@ class InstagramAuthTests(unittest.TestCase):
         self.old = {k: os.environ.get(k) for k in (
             "SCOUT_AUTH_DB", "SCOUT_DB", "SCOUT_IG_CLIENT_ID",
             "SCOUT_IG_CLIENT_SECRET", "SCOUT_IG_REDIRECT_URI",
-            "SCOUT_TOKEN_ENCRYPTION_KEY", "SCOUT_IG_GRAPH_VERSION",
+            "SCOUT_TOKEN_ENCRYPTION_KEY", "SCOUT_IG_GRAPH_VERSION", "SCOUT_ALLOWED_IG_IDS",
         )}
         os.environ["SCOUT_AUTH_DB"] = os.path.join(self.tmp.name, "auth.sqlite")
         os.environ["SCOUT_DB"] = os.path.join(self.tmp.name, "cache.sqlite")
@@ -26,6 +26,7 @@ class InstagramAuthTests(unittest.TestCase):
         os.environ["SCOUT_IG_REDIRECT_URI"] = "https://kestrel.test/auth/instagram/callback"
         os.environ["SCOUT_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
         os.environ["SCOUT_IG_GRAPH_VERSION"] = "v27.0"
+        os.environ["SCOUT_ALLOWED_IG_IDS"] = "ig-111"
 
     def tearDown(self):
         for key, value in self.old.items():

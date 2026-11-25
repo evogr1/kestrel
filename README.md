@@ -23,9 +23,9 @@ Kestrel is **free**: no credits, no paid tier. The only limits are YouTube's and
 
 For the hosted Kestrel server, share **https://scout.solodac.com/connect/**. The single MCP endpoint is **https://scout.solodac.com/mcp**. Each AI client registers as its own public OAuth client, signs the user in through Instagram Business Login, and receives a short-lived Kestrel bearer token bound to that user's identity. Kestrel stores the Instagram access token encrypted on the server; it is never passed to the AI client.
 
-The service implements OAuth authorization-code flow with PKCE S256, protected-resource metadata, authorization-server metadata, dynamic client registration, resource/audience checks and rotating refresh tokens. The old shared `SCOUT_MCP_SECRET` path is disabled by default; do not enable `SCOUT_ALLOW_SHARED_MCP` on a multi-user deployment.
+The service implements OAuth authorization-code flow with PKCE S256, protected-resource metadata, authorization-server metadata, dynamic client registration, resource/audience checks and rotating refresh tokens. The `SCOUT_MCP_SECRET` URL is the operator's private connector with full access: never share it, and set `SCOUT_ALLOW_SHARED_MCP=0` to turn it off. Sign-in is invite only (`SCOUT_ALLOWED_IG_IDS`). Signed-in users get only tools that use their own Instagram account.
 
-Sign-in is bound to the browser that approved the consent page. Only Claude, ChatGPT and loopback callbacks can register; add others in `SCOUT_OAUTH_EXTRA_REDIRECTS`. Tools that use the operator's credentials or run shared jobs are not available to signed-in users.
+Sign-in is bound to the browser that approved the consent page. Only Claude, ChatGPT and loopback callbacks can register; add others in `SCOUT_OAUTH_EXTRA_REDIRECTS`.
 
 ## Pick how you run it
 

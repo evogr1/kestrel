@@ -363,17 +363,13 @@ class Mine:
 
     def _ig_pick(self, account):
         user_id = getattr(CALLER, "user_id", None)
-        caller_name = str(getattr(CALLER, "name", "") or "")
         if user_id:
-            # MCP tenants are strictly limited to the Instagram token attached to their identity.
+            # Signed-in users are strictly limited to the Instagram token attached to their identity.
             pool = self.ig.user_pool()
             if not pool:
                 raise ScoutError("No Instagram account is connected to this Kestrel user. Reconnect Kestrel and authorize Instagram.", 401)
-        elif caller_name.startswith("mcp"):
-            # The explicitly enabled legacy shared MCP endpoint is never allowed to read private accounts.
-            raise ScoutError("Private Instagram insights require a user-authenticated Kestrel OAuth session.", 401)
         else:
-            # Preserve the server operator's existing authenticated REST/CLI workflow.
+            # The operator: REST, CLI and the private secret connector URL.
             pool = self.ig.pool()
         if not account:
             return pool
@@ -396,14 +392,7 @@ class Mine:
                                  lambda: self._ig_get(t, t["ig_user_id"], fields="username,name,followers_count,follows_count,media_count"))
 
     def ig_accounts(self):
-        user_id = getattr(CALLER, "user_id", None)
-        caller_name = str(getattr(CALLER, "name", "") or "")
-        if user_id:
-            pool = self.ig.user_pool()
-        elif caller_name.startswith("mcp"):
-            raise ScoutError("Private Instagram insights require a user-authenticated Kestrel OAuth session.", 401)
-        else:
-            pool = self.ig.pool()
+        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
         out = []
         for t in pool:
             try:

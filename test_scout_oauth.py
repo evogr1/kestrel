@@ -14,6 +14,8 @@ from unittest import mock
 from cryptography.fernet import Fernet
 
 import scout_auth
+import scout_core
+import scout_mine
 import scout_oauth
 import scout_extras
 import scout_growth
@@ -35,6 +37,7 @@ class KestrelOAuthTests(unittest.TestCase):
             "SCOUT_AUTH_DB", "SCOUT_DB", "SCOUT_PUBLIC_URL",
             "SCOUT_IG_CLIENT_ID", "SCOUT_IG_CLIENT_SECRET",
             "SCOUT_IG_REDIRECT_URI", "SCOUT_TOKEN_ENCRYPTION_KEY", "SCOUT_OAUTH_EXTRA_REDIRECTS",
+            "SCOUT_ALLOWED_IG_IDS",
         )}
         os.environ["SCOUT_AUTH_DB"] = os.path.join(self.tmp.name, "auth.sqlite")
         os.environ["SCOUT_DB"] = os.path.join(self.tmp.name, "cache.sqlite")
@@ -43,6 +46,7 @@ class KestrelOAuthTests(unittest.TestCase):
         os.environ["SCOUT_IG_CLIENT_SECRET"] = "test-app-secret"
         os.environ["SCOUT_IG_REDIRECT_URI"] = "https://kestrel.test/auth/instagram/callback"
         os.environ["SCOUT_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+        os.environ["SCOUT_ALLOWED_IG_IDS"] = "ig-user-a ig-user-b 1"
         os.environ["SCOUT_OAUTH_EXTRA_REDIRECTS"] = " ".join((
             "https://client.example/callback", "https://a.example/callback", "https://b.example/callback"))
 
@@ -237,6 +241,40 @@ class KestrelOAuthTests(unittest.TestCase):
         db.close()
         self.assertTrue(scout_oauth.accept_consent(self._consent()["consent_token"])[1])
 
+    def test_sign_in_is_invite_only(self):
+        for allowed, ok in (("", False), ("other", False), ("ig-user-a", True), ("*", True)):
+            os.environ["SCOUT_ALLOWED_IG_IDS"] = allowed
+            self.assertEqual(scout_auth.is_invited("ig-user-a"), ok, allowed)
+        os.environ["SCOUT_ALLOWED_IG_IDS"] = ""
+        with self.assertRaises(RuntimeError):
+            self._authorize_and_meta_callback("ig-user-a", "a", "https://a.example/callback")
+
+    def test_removing_an_invite_cuts_off_existing_tokens(self):
+        client, redirect, verifier, code = self._authorize_and_meta_callback(
+            "ig-user-a", "a", "https://a.example/callback")
+        token = scout_oauth.token({"grant_type": "authorization_code", "client_id": client, "code": code,
+                                   "redirect_uri": redirect, "code_verifier": verifier,
+                                   "resource": scout_oauth.resource_uri()})["access_token"]
+        self.assertTrue(scout_oauth.validate_access(token))
+        os.environ["SCOUT_ALLOWED_IG_IDS"] = ""
+        self.assertIsNone(scout_oauth.validate_access(token))
+
+    def test_forwarded_address_only_from_trusted_proxy(self):
+        head = {"CF-Connecting-IP": "203.0.113.7"}
+        self.assertEqual(scout_oauth.client_ip("198.51.100.1", head), "198.51.100.1")
+        self.assertEqual(scout_oauth.client_ip("127.0.0.1", head), "203.0.113.7")
+        self.assertEqual(scout_oauth.client_ip("127.0.0.1", {"CF-Connecting-IP": "junk"}), "127.0.0.1")
+        with mock.patch.dict(os.environ, {"SCOUT_TRUSTED_PROXIES": "198.51.100.0/24"}):
+            self.assertEqual(scout_oauth.client_ip("198.51.100.1", head), "203.0.113.7")
+
+    def test_rate_limit_memory_is_bounded(self):
+        scout_oauth._HITS.clear()
+        with mock.patch.object(scout_oauth, "MAX_BUCKETS", 5):
+            for i in range(50):
+                scout_oauth.allow("k%d" % i)
+            self.assertLessEqual(len(scout_oauth._HITS), 5)
+        scout_oauth._HITS.clear()
+
     def test_rate_limit(self):
         scout_oauth._HITS.clear()
         self.assertTrue(all(scout_oauth.allow("ip1", limit=3, window=60, now=100) for _ in range(3)))
@@ -311,6 +349,12 @@ class KestrelHTTPSignInTests(unittest.TestCase):
                 self.assertTrue(headers["Location"].startswith(redirect + "?"))
                 self.assertIn("Max-Age=0", headers["Set-Cookie"])
 
+    def test_global_ceiling_across_addresses(self):
+        body = b'{"redirect_uris":["https://claude.ai/api/mcp/auth_callback"]}'
+        with mock.patch.object(scout_oauth, "GLOBAL_LIMIT", 3):
+            codes = [self._call("/register", body, {"CF-Connecting-IP": "203.0.113.%d" % i})[0] for i in range(5)]
+        self.assertEqual(codes, [201, 201, 201, 429, 429])
+
     def test_register_is_rate_limited(self):
         body = b'{"redirect_uris":["https://claude.ai/api/mcp/auth_callback"]}'
         codes = [self._call("/register", body)[0] for _ in range(scout_oauth.RATE_LIMIT + 1)]
@@ -325,36 +369,59 @@ class KestrelTenantIsolationTests(unittest.TestCase):
     def tearDown(self):
         CALLER.user_id = CALLER.name = None
 
-    def test_operator_credential_tools_are_hidden_and_rejected(self):
+    def test_users_see_only_own_account_tools_and_others_are_rejected(self):
         names = {row["name"] for row in scout_remote_mcp._catalog_for_caller()}
-        routes = {t[0]: t[1] for t in scout_mcp.TOOLS}
-        for name, route in routes.items():
-            if route not in scout_remote_mcp.TENANT_BLOCKED_ROUTES:
+        self.assertEqual({t[1] for t in scout_mcp.TOOLS if t[0] in names}, scout_remote_mcp.TENANT_ALLOWED_ROUTES
+                         & {t[1] for t in scout_mcp.TOOLS})
+        for tool in scout_mcp.TOOLS:
+            if tool[1] in scout_remote_mcp.TENANT_ALLOWED_ROUTES:
                 continue
-            self.assertNotIn(name, names)
             reply = scout_remote_mcp.handle(None, {}, None, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                                            "params": {"name": "kestrel_call", "arguments": {"tool": name}}})
-            self.assertTrue(reply["result"]["isError"], name)
-        for route in ("/v1/brief", "/v1/brief/push", "/v1/watch", "/v1/me/weekly", "/v1/jobs/daily",
-                      "/v1/changes/scan", "/v1/hooks/extract", "/v1/x/profile", "/v1/x/outliers", "/v1/x/search",
-                      "/v1/social/search", "/v1/setup", "/v1/usage", "/v1/ig/seed_outliers"):
-            self.assertIn(route, scout_server.ROUTES, route)
-            self.assertIn(route, scout_remote_mcp.TENANT_BLOCKED_ROUTES)
+                                            "params": {"name": "kestrel_call", "arguments": {"tool": tool[0]}}})
+            self.assertTrue(reply["result"]["isError"], tool[0])
 
-    def test_operator_credentials_are_unusable_even_indirectly(self):
-        env = {"SCOUT_ALERT_WEBHOOK": "https://op.example/hook", "SCOUT_TRELLO_KEY": "k",
-               "SCOUT_TRELLO_TOKEN": "t", "SCOUT_TRELLO_LISTS": '{"p":"l"}', "X_BEARER_TOKEN": "x"}
-        with mock.patch.dict(os.environ, env):
-            k = scout_extras.Kestrel.__new__(scout_extras.Kestrel)
-            k._post = mock.Mock()
-            self.assertFalse(k._notify("t", [1]))
-            self.assertEqual(k._push_trello({"p": []})["pushed"], 0)
-            k._post.assert_not_called()
-            x = scout_social.X(None)
-            self.assertFalse(x.has_api)
-            self.assertEqual(x.bearer, "")
-            CALLER.user_id = CALLER.name = None
-            self.assertTrue(x.has_api)
+    def test_no_user_tool_sends_an_operator_credential(self):
+        marks = ("OPERATOR-YT", "OPERATOR-IG", "OPERATOR-X", "operator.example")
+        env = {"YOUTUBE_API_KEY": marks[0], "SCOUT_IG_TOKEN": marks[1], "SCOUT_IG_USER_ID": "9",
+               "X_BEARER_TOKEN": marks[2], "SCOUT_ALERT_WEBHOOK": "https://operator.example/h",
+               "SCOUT_JUDGE_URL": "https://operator.example/j"}
+        account = {"label": "user:tenant", "token": "TENANT-TOKEN", "ig_user_id": "1", "username": "t",
+                   "api_host": "graph.instagram.com", "api_version": "v27.0"}
+        sent = []
+
+        def record(*a, **k):
+            sent.append(repr((a, k)) + repr([getattr(x, "full_url", "") for x in a]))
+            raise OSError("offline")
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, env), \
+                mock.patch.object(scout_auth, "instagram_account", return_value=account), \
+                mock.patch("urllib.request.urlopen", side_effect=record), \
+                mock.patch("subprocess.run", side_effect=record), mock.patch("subprocess.Popen", side_effect=record):
+            kestrel = scout_extras.Kestrel(scout_core.Config(db=os.path.join(d, "c.sqlite")))
+            routes = {t[0]: t[1] for t in scout_mcp.TOOLS}
+            for row in scout_remote_mcp._catalog_for_caller():
+                CALLER.user_id, CALLER.name = "tenant", "mcp:tenant"
+                reply = scout_remote_mcp.handle(kestrel, scout_server.ROUTES, scout_server._conv, {
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                        "name": row["name"], "arguments": {
+                            k: v for k, v in {"handle": "someone", "account": "t", "niche": "n"}.items()
+                            if k in scout_server.ROUTES[routes[row["name"]]][2]}}})
+                self.assertNotIn("unknown parameter", str(reply), row["name"])
+            self.assertEqual(kestrel.ig.pool(), [])
+            with self.assertRaises(scout_core.ScoutError):
+                kestrel.yt.api("videos", 1)
+        self.assertTrue(any("TENANT-TOKEN" in s for s in sent))
+        for line in sent:
+            for mark in marks:
+                self.assertNotIn(mark, line)
+
+    def test_operator_secret_url_can_read_own_instagram(self):
+        CALLER.user_id, CALLER.name = None, "mcp"
+        mine = scout_mine.Mine.__new__(scout_mine.Mine)
+        mine.ig = mock.Mock()
+        mine.ig.pool.return_value = [{"label": "op", "token": "t", "ig_user_id": "9"}]
+        self.assertEqual(mine._ig_pick(None)[0]["label"], "op")
+        mine.ig.user_pool.assert_not_called()
 
     def test_background_thread_keeps_the_caller_identity(self):
         seen = {}

@@ -106,6 +106,12 @@ def _request(url, data=None):
         raise RuntimeError("Could not reach Meta OAuth") from None
 
 
+def is_invited(ig_user_id):
+    """Closed by default. SCOUT_ALLOWED_IG_IDS lists numeric Instagram user IDs, or * to open sign-up."""
+    allowed = os.environ.get("SCOUT_ALLOWED_IG_IDS", "").replace(",", " ").split()
+    return "*" in allowed or str(ig_user_id) in allowed
+
+
 def start_url(state):
     """Start Meta Instagram Login using an OAuth-AS transaction state supplied by Kestrel."""
     _fernet()
@@ -192,6 +198,9 @@ def finish(code, state):
     if not ig_user_id or not username:
         raise RuntimeError("Could not verify the Instagram professional account")
 
+    if not is_invited(ig_user_id):
+        raise RuntimeError("This Kestrel server is invite only. Ask the operator to add Instagram account ID %s." % ig_user_id)
+
     expires_at = time.time() + int(long.get("expires_in") or 5184000)
     granted = short.get("permissions")
     scopes = sorted(set(granted if isinstance(granted, list) else SCOPES))
@@ -231,7 +240,7 @@ def instagram_account(user_id):
             "select * from auth_users where user_id=? and revoked_at is null",
             (user_id,),
         ).fetchone()
-        if not row:
+        if not row or not is_invited(row["ig_user_id"]):
             return None
         token = _dec(row["encrypted_token"])
         expires_at = row["expires_at"]
