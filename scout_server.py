@@ -82,6 +82,7 @@ ROUTES = {
     "/v1/me/achievements": ("me_achievements", "GET", {"channel": str}),
     "/v1/me/audience": ("me_audience", "GET", {"channel": str, "days": int}),
     "/v1/me/ig": ("me_ig", "GET", {"account": str, "days": int, "reels": int}),
+    "/v1/me/ig/disconnect": ("ig_disconnect", "POST", {}),
     # X and Facebook
     "/v1/x/post": ("x_post", "GET", {"ref": str}),
     "/v1/x/posts": ("x_posts", "GET", {"refs": _list}),
