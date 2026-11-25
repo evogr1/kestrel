@@ -74,8 +74,19 @@ class InstagramAuthTests(unittest.TestCase):
         import scout_core
         cache = scout_core.Cache(os.path.join(self.tmp.name, "state.sqlite"))
         try:
+            # The main Kestrel process registers workspace schemas during startup.
+            # Tenant DB creation must clone only those definitions, never the rows.
+            cache._base_db.execute("create table if not exists tracked (channel_id text primary key, title text)")
+            cache._base_db.execute("insert or replace into tracked values('operator-channel','Operator private channel')")
+            cache._base_db.commit()
+
             scout_core.CALLER.user_id = "tenant-A"
             cache.put("private", {"value": "A"}, 60)
+            self.assertTrue(cache.db.execute(
+                "select 1 from sqlite_master where type='table' and name='tracked'"
+            ).fetchone())
+            cache.db.execute("insert into tracked values('tenant-A-channel','Tenant A')")
+            cache.db.commit()
             path_a = cache.path + ".users/" + hashlib.sha256(b"tenant-A").hexdigest() + ".sqlite"
             self.assertTrue(os.path.exists(path_a))
 
@@ -83,9 +94,11 @@ class InstagramAuthTests(unittest.TestCase):
             self.assertIsNone(cache.get("private"))
             cache.put("private", {"value": "B"}, 60)
             self.assertEqual(cache.get("private"), {"value": "B"})
+            self.assertEqual(cache.db.execute("select count(*) from tracked").fetchone()[0], 0)
 
             scout_core.CALLER.user_id = "tenant-A"
             self.assertEqual(cache.get("private"), {"value": "A"})
+            self.assertEqual(cache.db.execute("select title from tracked").fetchone()[0], "Tenant A")
         finally:
             scout_core.CALLER.user_id = None
 
