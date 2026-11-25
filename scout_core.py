@@ -8,6 +8,7 @@ Data sources
 Stdlib only. yt-dlp is optional but needed for transcripts.
 """
 import glob
+import hashlib
 import json
 import sys
 import math
