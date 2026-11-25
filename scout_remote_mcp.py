@@ -1,7 +1,7 @@
-"""Remote MCP (streamable HTTP, JSON replies) so claude.ai custom connectors can use Scout.
+"""Remote MCP (streamable HTTP, JSON replies) for Claude, ChatGPT and other MCP clients.
 
-Mounted by scout_server.py at /mcp/<SCOUT_MCP_SECRET>. Tool calls run in process against the same
-ROUTES table the REST API uses, so there is no second copy of any logic and no key is sent anywhere.
+Mounted by scout_server.py at /mcp and protected by Kestrel OAuth bearer tokens. Each
+request runs against the same ROUTES table as the REST API with a verified tenant identity.
 """
 import json
 import os
