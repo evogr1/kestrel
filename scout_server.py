@@ -206,7 +206,31 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             if u.path == "/authorize" and verb == "GET":
                 try:
                     params = {k: v[0] for k, v in urllib.parse.parse_qs(u.query, keep_blank_values=True).items()}
-                    target = scout_oauth.begin(params)
+                    consent = scout_oauth.prepare_authorization(params)
+                    body = scout_oauth.consent_page(consent).encode("utf8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                except Exception as e:
+                    return self._send(400, {"error": "invalid_request", "error_description": str(e)})
+            if u.path == "/authorize" and verb == "POST":
+                origin = self.headers.get("Origin")
+                fetch_site = self.headers.get("Sec-Fetch-Site", "")
+                if (origin and origin.rstrip("/") != scout_oauth.issuer()) or fetch_site == "cross-site":
+                    return self._send(403, {"error": "access_denied"})
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "invalid_request"})
+                raw = self.rfile.read(n).decode("utf8") if n else ""
+                form = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+                try:
+                    target = scout_oauth.accept_consent(form.get("consent_token", ""))
                     self.send_response(302)
                     self.send_header("Location", target)
                     self.send_header("Cache-Control", "no-store")
@@ -214,7 +238,13 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     self.end_headers()
                     return
                 except Exception as e:
-                    return self._send(400, {"error": "invalid_request", "error_description": str(e)})
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
             if u.path == "/auth/instagram/callback" and verb == "GET":
                 q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
                 try:
