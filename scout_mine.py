@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scout_core import ScoutError, med, age_days, HOME, UA
+from scout_core import ScoutError, med, age_days, HOME, UA, CALLER
 
 YT_ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
 YT_DATA = "https://www.googleapis.com/youtube/v3/"
@@ -357,12 +357,20 @@ class Mine:
     # ---------------------------------------------------------------- Instagram (own accounts)
     def _ig_get(self, t, path, **q):
         q["access_token"] = t["token"]
-        return _http("https://graph.facebook.com/%s/%s?%s" % (self.ig.cfg.ig_version, path, urllib.parse.urlencode(q)))
+        host = t.get("api_host") or "graph.facebook.com"
+        version = t.get("api_version") or self.ig.cfg.ig_version
+        return _http("https://%s/%s/%s?%s" % (host, version, path, urllib.parse.urlencode(q)))
 
     def _ig_pick(self, account):
-        pool = self.ig.pool()
-        if not pool:
-            raise ScoutError("no Instagram token found. Set SCOUT_IG_POOL.", 501)
+        user_id = getattr(CALLER, "user_id", None)
+        if user_id:
+            # Signed-in users are strictly limited to the Instagram token attached to their identity.
+            pool = self.ig.user_pool()
+            if not pool:
+                raise ScoutError("No Instagram account is connected to this Kestrel user. Reconnect Kestrel and authorize Instagram.", 401)
+        else:
+            # The operator: REST, CLI and the private secret connector URL.
+            pool = self.ig.pool()
         if not account:
             return pool
         a = account.strip().lstrip("@").lower()
@@ -384,8 +392,9 @@ class Mine:
                                  lambda: self._ig_get(t, t["ig_user_id"], fields="username,name,followers_count,follows_count,media_count"))
 
     def ig_accounts(self):
+        pool = self.ig.user_pool() if getattr(CALLER, "user_id", None) else self.ig.pool()
         out = []
-        for t in self.ig.pool():
+        for t in pool:
             try:
                 p = self._ig_profile(t)
                 out.append({"label": t["label"], "username": p.get("username"), "followers": p.get("followers_count"), "posts": p.get("media_count")})

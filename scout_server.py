@@ -17,6 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from scout_core import ScoutError, Config
 from scout_extras import Kestrel
 import scout_legal
+import scout_connect
+import scout_auth
+import scout_oauth
 import scout_core
 import scout_remote_mcp
 
@@ -79,6 +82,7 @@ ROUTES = {
     "/v1/me/achievements": ("me_achievements", "GET", {"channel": str}),
     "/v1/me/audience": ("me_audience", "GET", {"channel": str, "days": int}),
     "/v1/me/ig": ("me_ig", "GET", {"account": str, "days": int, "reels": int}),
+    "/v1/me/ig/disconnect": ("ig_disconnect", "POST", {}),
     # X and Facebook
     "/v1/x/post": ("x_post", "GET", {"ref": str}),
     "/v1/x/posts": ("x_posts", "GET", {"refs": _list}),
@@ -152,8 +156,10 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
     class H(BaseHTTPRequestHandler):
         def log_message(self, fmt, *a):
             line = fmt % a
-            if mcp_secret:                      # the connector URL is a key: never write it to logs
+            if mcp_secret:
                 line = line.replace(mcp_secret, "<secret>")
+            line = __import__("re").sub(r"/mcp/u/[A-Za-z0-9_-]+", "/mcp/u/<user-key>", line)
+            line = __import__("re").sub(r"([?&](?:code|state)=)[^& ]+", r"\1<redacted>", line)
             sys.stderr.write("%s %s\n" % (self.address_string(), line))
 
         def _send(self, code, obj):
@@ -172,9 +178,196 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
             return bool(got) and hmac.compare_digest(got.encode(), key.encode())
 
         def _handle(self, verb):
+            scout_core.CALLER.user_id = None
+            scout_core.CALLER.name = None
             u = urllib.parse.urlparse(self.path)
             if u.path == "/health":
                 return self._send(200, {"ok": True})
+            # MCP OAuth metadata: clients discover the protected resource first, then its authorization server.
+            if u.path == "/.well-known/oauth-authorization-server" and verb == "GET":
+                return self._send(200, scout_oauth.authorization_server_metadata())
+            if u.path in ("/.well-known/oauth-protected-resource/mcp",) and verb == "GET":
+                return self._send(200, scout_oauth.protected_resource_metadata())
+            if u.path in ("/register", "/authorize"):
+                visitor = scout_oauth.client_ip(self.client_address[0], self.headers)
+                endpoint = "%s %s" % (verb, u.path)
+                if not (scout_oauth.allow(endpoint + " " + visitor)
+                        and scout_oauth.allow(endpoint, limit=scout_oauth.GLOBAL_LIMIT)):
+                    return self._send(429, {"error": "temporarily_unavailable",
+                                            "error_description": "Too many sign-in requests. Try again later."})
+            if u.path == "/register" and verb == "POST":
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "invalid_client_metadata"})
+                try:
+                    payload = json.loads(self.rfile.read(n).decode("utf8") or "{}")
+                    result = scout_oauth.register(payload)
+                    self.send_response(201)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    body = json.dumps(result).encode("utf8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                except Exception as e:
+                    return self._send(400, {"error": "invalid_client_metadata", "error_description": str(e)})
+            if u.path == "/authorize" and verb == "GET":
+                try:
+                    params = {k: v[0] for k, v in urllib.parse.parse_qs(u.query, keep_blank_values=True).items()}
+                    consent = scout_oauth.prepare_authorization(params)
+                    body = scout_oauth.consent_page(consent).encode("utf8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "same-origin")
+                    target = urllib.parse.urlparse(consent["redirect_uri"])
+                    self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "
+                                     "form-action 'self' https://www.instagram.com %s://%s; base-uri 'none'; "
+                                     "frame-ancestors 'none'" % (target.scheme, target.netloc))
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                except Exception as e:
+                    return self._send(400, {"error": "invalid_request", "error_description": str(e)})
+            if u.path == "/authorize" and verb == "POST":
+                origin = self.headers.get("Origin")
+                fetch_site = self.headers.get("Sec-Fetch-Site", "")
+                if (origin and origin.rstrip("/") != scout_oauth.issuer()) or fetch_site == "cross-site":
+                    return self._send(403, {"error": "access_denied"})
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "invalid_request"})
+                raw = self.rfile.read(n).decode("utf8") if n else ""
+                form = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+                try:
+                    target, binding = scout_oauth.accept_consent(form.get("consent_token", ""))
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.send_header("Set-Cookie", "%s=%s; Path=/; Max-Age=900; Secure; HttpOnly; SameSite=Lax"
+                                     % (scout_oauth.BROWSER_COOKIE, binding))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    return
+                except Exception as e:
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+            if u.path == "/auth/instagram/callback" and verb == "GET":
+                q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
+                cookies = dict(part.strip().split("=", 1) for part in (self.headers.get("Cookie") or "").split(";")
+                               if "=" in part)
+                try:
+                    target = scout_oauth.meta_callback(
+                        (q.get("code") or [""])[0].rstrip("#_"),
+                        (q.get("state") or [""])[0],
+                        error=(q.get("error") or [None])[0],
+                        binding=cookies.get(scout_oauth.BROWSER_COOKIE),
+                    )
+                    self.send_response(302)
+                    self.send_header("Location", target)
+                    self.send_header("Set-Cookie", "%s=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+                                     % scout_oauth.BROWSER_COOKIE)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    return
+                except Exception as e:
+                    b = scout_auth.error_page(e, scout_connect.public_url()).encode("utf8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
+            if u.path in ("/token", "/revoke") and verb == "POST":
+                n = _clen(self.headers.get("Content-Length"))
+                if n > MAX_BODY:
+                    return self._send(413, {"error": "invalid_request"})
+                raw = self.rfile.read(n).decode("utf8") if n else ""
+                payload = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+                try:
+                    result = scout_oauth.token(payload) if u.path == "/token" else scout_oauth.revoke(payload)
+                    return self._send(200, result)
+                except Exception as e:
+                    return self._send(400, {
+                        "error": "invalid_grant" if u.path == "/token" else "invalid_request",
+                        "error_description": str(e),
+                    })
+            if u.path == "/account/status" and verb == "GET":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid_token"})
+                return self._send(200, scout_auth.connection_status(user_id))
+            if u.path == "/account/disconnect" and verb == "POST":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    return self._send(401, {"error": "invalid_token"})
+                result = scout_auth.disconnect(user_id)
+                scout_oauth.revoke_user(user_id)
+                return self._send(200, result)
+            if u.path == "/mcp":
+                header = self.headers.get("Authorization", "")
+                raw_token = header[7:] if header.lower().startswith("bearer ") else ""
+                user_id = scout_oauth.validate_access(raw_token)
+                if not user_id:
+                    body = json.dumps({"error": "unauthorized"}).encode("utf8")
+                    self.send_response(401)
+                    challenge = 'Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp", scope="kestrel"' % scout_oauth.issuer()
+                    if raw_token:
+                        challenge += ', error="invalid_token"'
+                    self.send_header("WWW-Authenticate", challenge)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                scout_core.CALLER.name = "mcp:" + user_id
+                scout_core.CALLER.user_id = user_id
+                try:
+                    if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
+                        return self._sse_list_changed()
+                    if verb != "POST":
+                        return self._send(405, {"error": "use POST"})
+                    n = _clen(self.headers.get("Content-Length"))
+                    if n > MAX_BODY:
+                        return self._send(413, {"error": "body too large"})
+                    try:
+                        msg = json.loads(self.rfile.read(n).decode("utf8") or "{}")
+                    except (ValueError, UnicodeDecodeError):
+                        return self._send(400, {"error": "body must be JSON"})
+                    if not isinstance(msg, (dict, list)):
+                        return self._send(400, {"error": "body must be a JSON-RPC object or batch"})
+                    out = [scout_remote_mcp.handle(scout, ROUTES, _conv, item)
+                           for item in (msg if isinstance(msg, list) else [msg])]
+                    out = [item for item in out if item is not None]
+                    if not out:
+                        self.send_response(202)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    return self._send(200, out if isinstance(msg, list) else out[0])
+                finally:
+                    scout_core.CALLER.user_id = None
+                    scout_core.CALLER.name = None
+            if u.path in ("/connect", "/connect/") and verb == "GET":
+                b = scout_connect.page(scout_connect.public_url()).encode("utf8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                return self.wfile.write(b)
             if u.path in scout_legal.PAGES and verb == "GET":
                 b = scout_legal.PAGES[u.path]().encode("utf8")
                 self.send_response(200)
@@ -182,9 +375,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 return self.wfile.write(b)
-            if u.path.startswith("/.well-known/") or u.path.rstrip("/") == "/mcp":   # 14 Nov: 404, not 401, so claude.ai never starts an OAuth sign-in (the secret URL is the auth)
-                return self._send(404, {"error": "not found"})
-            if mcp_secret and u.path.startswith("/mcp/"):
+            if mcp_secret and os.environ.get("SCOUT_ALLOW_SHARED_MCP", "1") != "0" and u.path.startswith("/mcp/"):
                 if not hmac.compare_digest(u.path[5:].strip("/").encode(), mcp_secret.encode()):
                     return self._send(404, {"error": "not found"})
                 if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
@@ -199,6 +390,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                 except ValueError:
                     return self._send(400, {"error": "body must be JSON"})
                 scout_core.CALLER.name = "mcp"
+                scout_core.CALLER.user_id = None
                 out = [scout_remote_mcp.handle(scout, ROUTES, _conv, m) for m in (msg if isinstance(msg, list) else [msg])]
                 out = [o for o in out if o is not None]
                 if not out:

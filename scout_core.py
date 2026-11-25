@@ -8,6 +8,7 @@ Data sources
 Stdlib only. yt-dlp is optional but needed for transcripts.
 """
 import glob
+import hashlib
 import json
 import sys
 import math
@@ -57,7 +58,7 @@ class Config:
         self.ig_pool = kw.get("ig_pool", e("SCOUT_IG_POOL", ""))
         self.ig_seeds = kw.get("ig_seeds", e("SCOUT_IG_SEEDS", ""))
         self.ig_stop_pct = int(kw.get("ig_stop_pct", e("SCOUT_IG_STOP_PCT", "80")))
-        self.ig_version = kw.get("ig_version", e("SCOUT_IG_GRAPH_VERSION", "v26.0"))
+        self.ig_version = kw.get("ig_version", e("SCOUT_IG_GRAPH_VERSION", "v27.0"))
 
 
 def _outside_script():
@@ -142,48 +143,116 @@ def parse_channel_ref(ref):
 # ---------------------------------------------------------------- cache and usage
 
 class Cache:
+    """SQLite cache with one isolated database per authenticated Kestrel user.
+
+    Public research responses are cached per user as well as private workspace state.
+    This intentionally favours tenant isolation over cross-user cache sharing.
+    """
+
     def __init__(self, path):
-        d = os.path.dirname(path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        self.db = sqlite3.connect(path, check_same_thread=False, timeout=30)
-        self.lock = threading.Lock()
-        with self.lock:
-            self.db.execute("pragma journal_mode=wal")
-            self.db.execute("create table if not exists cache(k text primary key, v text, exp real)")
-            self.db.execute("create table if not exists usage(day text, name text, n integer, primary key(day, name))")
-            self.db.commit()
+        self.path = path
+        self.lock = threading.RLock()
+        self._local = threading.local()
+        self._base_db = self._open_db(path)
+
+    @staticmethod
+    def _open_db(path):
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
+        db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        db.execute("pragma busy_timeout=30000")
+        db.execute("pragma journal_mode=WAL")
+        db.execute("create table if not exists cache(k text primary key, v text, exp real)")
+        db.execute("create table if not exists usage(day text, name text, n integer, primary key(day, name))")
+        db.commit()
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return db
+
+    @property
+    def db(self):
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            return self._base_db
+        connections = getattr(self._local, "connections", None)
+        if connections is None:
+            connections = {}
+            self._local.connections = connections
+        digest = hashlib.sha256(str(user_id).encode("utf8")).hexdigest()
+        if digest not in connections:
+            directory = self.path + ".users"
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
+            tenant_db = self._open_db(os.path.join(directory, digest + ".sqlite"))
+            # Kestrel's modules register table/index definitions against the operator's
+            # base DB during startup. Give each new tenant DB those definitions only;
+            # never copy rows, cache values, account data or credentials.
+            with self.lock:
+                schemas = self._base_db.execute(
+                    "select type, name, sql from sqlite_master "
+                    "where type in ('table','index','view','trigger') and sql is not null "
+                    "and name not like 'sqlite_%' order by "
+                    "case type when 'table' then 0 when 'view' then 1 when 'index' then 2 else 3 end"
+                ).fetchall()
+                present = {
+                    (row[0], row[1]) for row in tenant_db.execute(
+                        "select type, name from sqlite_master"
+                    ).fetchall()
+                }
+                for kind, name, ddl in schemas:
+                    if (kind, name) not in present:
+                        tenant_db.execute(ddl)
+                tenant_db.commit()
+            connections[digest] = tenant_db
+        return connections[digest]
 
     def get(self, k):
         with self.lock:
-            r = self.db.execute("select v, exp from cache where k=?", (k,)).fetchone()
-        if r and r[1] > time.time():
-            return json.loads(r[0])
+            row = self.db.execute("select v, exp from cache where k=?", (k,)).fetchone()
+        if row and row[1] > time.time():
+            return json.loads(row[0])
         return None
 
     def put(self, k, v, ttl):
         with self.lock:
-            self.db.execute("insert or replace into cache values(?,?,?)", (k, json.dumps(v), time.time() + ttl))
+            self.db.execute("insert or replace into cache values(?,?,?)",
+                            (k, json.dumps(v), time.time() + ttl))
             self.db.commit()
 
     def cached(self, k, ttl, fn):
-        v = self.get(k)
-        if v is None:
-            v = fn()
-            self.put(k, v, ttl)
-        return v
+        value = self.get(k)
+        if value is None:
+            value = fn()
+            self.put(k, value, ttl)
+        return value
 
     def add_usage(self, name, n):
+        """Usage counters belong to the shared service/API keys, not to tenant workspaces."""
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            self.db.execute("insert into usage values(?,?,?) on conflict(day,name) do update set n=n+excluded.n", (day, name, n))
-            self.db.commit()
+            self._base_db.execute(
+                "insert into usage values(?,?,?) on conflict(day,name) do update set n=n+excluded.n",
+                (day, name, n),
+            )
+            self._base_db.commit()
 
     def usage(self, name):
         day = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
         with self.lock:
-            r = self.db.execute("select n from usage where day=? and name=?", (day, name)).fetchone()
-        return r[0] if r else 0
+            row = self._base_db.execute(
+                "select n from usage where day=? and name=?", (day, name)
+            ).fetchone()
+        return row[0] if row else 0
 
 
 # ---------------------------------------------------------------- YouTube
@@ -221,6 +290,8 @@ class YouTube:
 
     # ---- low level
     def api(self, endpoint, units, **params):
+        if getattr(CALLER, "user_id", None):
+            raise ScoutError("YouTube research uses the server operator's quota and is not available to signed-in users.", 403)
         for _ in range(len(self.cfg.yt_keys) or 1):
             pick = self._key_for(units)
             if not pick:
@@ -502,11 +573,25 @@ class Instagram:
         self.cfg, self.cache = cfg, cache
 
     def pool(self):
+        if getattr(CALLER, "user_id", None):
+            return []   # the shared discovery pool belongs to the operator
         if os.environ.get("SCOUT_IG_TOKEN") and os.environ.get("SCOUT_IG_USER_ID"):
             return [{"label": os.environ.get("SCOUT_IG_APP", "default"), "token": os.environ["SCOUT_IG_TOKEN"],
                      "ig_user_id": os.environ["SCOUT_IG_USER_ID"]}]
         return load_pool([self.cfg.ig_pool, os.path.join(HOME, ".scout", "ig_pool.json"),
                           os.path.join(HOME, ".kestrel-ig-discovery-pool.json"), os.path.join(HOME, ".kestrel-ig-discovery.json")])
+
+    def user_pool(self):
+        """The authenticated caller's own Instagram Login token, never the shared discovery pool."""
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            return []
+        try:
+            import scout_auth
+            account = scout_auth.instagram_account(user_id)
+            return [account] if account else []
+        except RuntimeError as e:
+            raise ScoutError(str(e), 503)
 
     def seeds(self):
         for p in (self.cfg.ig_seeds, os.path.join(HOME, ".scout", "ig_seeds.json")):

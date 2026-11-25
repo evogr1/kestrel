@@ -5,7 +5,7 @@
 FROM python:3.12-slim
 ARG TRANSCRIBE=0
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates && rm -rf /var/lib/apt/lists/* \
- && pip install --no-cache-dir yt-dlp \
+ && pip install --no-cache-dir yt-dlp cryptography \
  && if [ "$TRANSCRIBE" = "1" ]; then pip install --no-cache-dir faster-whisper; fi
 WORKDIR /app
 COPY *.py ./

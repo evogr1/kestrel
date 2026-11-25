@@ -22,7 +22,7 @@ import re
 import time
 import urllib.parse
 
-from scout_core import ScoutError, med, video_id, parse_duration
+from scout_core import ScoutError, med, video_id, parse_duration, CALLER
 
 SOCIAL = {"youtube.com", "youtu.be", "instagram.com", "facebook.com", "fb.com", "twitter.com", "x.com", "tiktok.com", "t.me",
           "linkedin.com", "threads.net", "discord.gg", "discord.com", "patreon.com", "linktr.ee", "bit.ly", "goo.gl", "amzn.to",
@@ -402,7 +402,7 @@ class Growth:
         d = tempfile.mkdtemp()
         try:
             cmd = ["yt-dlp", "-q", "--no-warnings", "--no-playlist", "-f", "ba/b", "-o", os.path.join(d, "a.%(ext)s"), url]
-            if os.environ.get("SCOUT_IG_COOKIES"):
+            if os.environ.get("SCOUT_IG_COOKIES") and not getattr(CALLER, "user_id", None):
                 cmd[1:1] = ["--cookies", os.environ["SCOUT_IG_COOKIES"]]
             p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             files = [f for f in os.listdir(d) if f.startswith("a.") and not f.endswith(".part")]
@@ -727,6 +727,18 @@ class Growth:
                       "goal": "What you want from it (followers, leads, sales...)", "language": "Language you post in"}
 
     def _profile_rows(self):
+        user_id = getattr(CALLER, "user_id", None)
+        if user_id:
+            self._w("create table if not exists my_profile_users(user_id text, k text, v text, primary key(user_id,k))")
+            rows = {k: v for k, v in self._q("select k, v from my_profile_users where user_id=?", (user_id,)) if v}
+            if not rows.get("instagram"):
+                try:
+                    accounts = self.mine.ig_accounts().get("accounts") or []
+                    if accounts and accounts[0].get("username"):
+                        rows["instagram"] = accounts[0]["username"]
+                except ScoutError:
+                    pass
+            return rows
         self._w("create table if not exists my_profile(k text primary key, v text)")
         return {k: v for k, v in self._q("select k, v from my_profile") if v}
 
@@ -740,6 +752,7 @@ class Growth:
 
     def my_profile_set(self, instagram=None, youtube=None, x=None, niche=None, audience=None, goal=None, language=None):
         vals = {"instagram": instagram, "youtube": youtube, "x": x, "niche": niche, "audience": audience, "goal": goal, "language": language}
+        user_id = getattr(CALLER, "user_id", None)
         self._profile_rows()
         for k, v in vals.items():
             if v is None:
@@ -747,7 +760,10 @@ class Growth:
             v = " ".join(str(v).split())[:300]
             if k in ("instagram", "youtube", "x"):
                 v = v.lstrip("@") if k != "youtube" else v
-            self._w("insert or replace into my_profile(k, v) values(?, ?)", (k, v))
+            if user_id:
+                self._w("insert or replace into my_profile_users(user_id,k,v) values(?,?,?)", (user_id, k, v))
+            else:
+                self._w("insert or replace into my_profile(k, v) values(?, ?)", (k, v))
         return self.my_profile()
 
     # how each platform is described on screen and in the brief
@@ -761,14 +777,19 @@ class Growth:
     def _my_insights_async(self, me):
         """Start reading my own account in the background (cached 3 h) so it overlaps with the creator's fetch."""
         box = {}
+        user_id = getattr(CALLER, "user_id", None)
+        name = getattr(CALLER, "name", None)
 
         def run():
             try:
-                box["v"] = self.cache.cached("myins:%s" % me.lower(), 3 * 3600, lambda: self.mine.ig_insights(me, days=28, reels=25))
+                CALLER.user_id, CALLER.name = user_id, name
+                box["v"] = self.cache.cached("myins:%s" % (me or user_id or "default").lower(), 3 * 3600, lambda: self.mine.ig_insights(me, days=28, reels=25))
             except ScoutError as e:
                 box["e"] = str(e)
             except Exception as e:  # never let my side break their breakdown
                 box["e"] = "%s" % type(e).__name__
+            finally:
+                CALLER.user_id = CALLER.name = None
         th = threading.Thread(target=run, daemon=True)
         th.start()
 

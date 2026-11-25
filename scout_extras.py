@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from scout_core import ScoutError, med, video_id, age_days
+from scout_core import ScoutError, med, video_id, age_days, CALLER
 from scout_plus import ScoutPlus
 from scout_growth import Growth
 
@@ -204,6 +204,21 @@ class Kestrel(Growth, ScoutPlus):
         self._growth_tables()
         self._post = _post_json
 
+    def ig_disconnect(self):
+        """Revoke this Kestrel user's Instagram connection and all Kestrel MCP tokens for the identity."""
+        from scout_core import CALLER, ScoutError
+        user_id = getattr(CALLER, "user_id", None)
+        if not user_id:
+            raise ScoutError("Instagram disconnect requires an authenticated Kestrel OAuth session.", 401)
+        import scout_auth
+        import scout_oauth
+        result = scout_auth.disconnect(user_id)
+        scout_oauth.revoke_user(user_id)
+        return {
+            "disconnected": bool(result.get("disconnected")),
+            "note": "Instagram credentials were removed from Kestrel and all Kestrel OAuth sessions were revoked. Remove the Kestrel connector from your AI client if you no longer need it.",
+        }
+
     # ------------------------------------------------------------ ranked, deduped feed
     def ranked(self, day=None, niche=None, kind=None, limit=60):
         f = self.feed(day=day, niche=niche, kind=kind, limit=1000)
@@ -267,7 +282,7 @@ class Kestrel(Growth, ScoutPlus):
         for n, items in cands.items():
             rule = rules.get(n, {})
             cap = int(rule.get("per_page", per_page))
-            if items and os.environ.get("SCOUT_JUDGE_URL"):
+            if items and os.environ.get("SCOUT_JUDGE_URL") and not getattr(CALLER, "user_id", None):
                 items, info = self._judge(n, rule, items)
                 judged[n] = info
                 cut += [dict(c, page=n) for c in info.pop("rejected", [])]
@@ -308,6 +323,8 @@ class Kestrel(Growth, ScoutPlus):
         return [it for _, it in keep], {"status": "ok", "scored": len(scores), "kept": len(keep), "rejected": rejected}
 
     def _push_trello(self, pages):
+        if getattr(CALLER, "user_id", None):
+            return {"pushed": 0, "errors": ["Trello push is only available to the server operator"]}
         key, tok = os.environ.get("SCOUT_TRELLO_KEY", ""), os.environ.get("SCOUT_TRELLO_TOKEN", "")
         try:
             lists = json.loads(os.environ.get("SCOUT_TRELLO_LISTS", "{}"))
@@ -333,6 +350,8 @@ class Kestrel(Growth, ScoutPlus):
 
     # ------------------------------------------------------------ 2. early-breakout watch
     def _notify(self, text, items):
+        if getattr(CALLER, "user_id", None):
+            return False
         url = os.environ.get("SCOUT_ALERT_WEBHOOK", "")
         if not url or not items:
             return False

@@ -1,16 +1,38 @@
-"""Remote MCP (streamable HTTP, JSON replies) so claude.ai custom connectors can use Scout.
+"""Remote MCP (streamable HTTP, JSON replies) for Claude, ChatGPT and other MCP clients.
 
-Mounted by scout_server.py at /mcp/<SCOUT_MCP_SECRET>. Tool calls run in process against the same
-ROUTES table the REST API uses, so there is no second copy of any logic and no key is sent anywhere.
+Mounted by scout_server.py at /mcp and protected by Kestrel OAuth bearer tokens. Each
+request runs against the same ROUTES table as the REST API with a verified tenant identity.
 """
 import json
 import os
 
-from scout_core import ScoutError
+from scout_core import ScoutError, CALLER
 from scout_mcp import TOOLS, REQUIRED, GATEWAY_NOTE, SETUP_NOTE, UI, catalog, tool_list, filter_catalog, ui_meta
 import scout_showcase
 
 MAX_CHARS = 60000
+
+# Signed-in users get only tools that run on their own Instagram token and their own database.
+# Everything else spends the operator's API quota, server or accounts. Default is closed:
+# a new route is unavailable to users until it is added here.
+TENANT_ALLOWED_ROUTES = {
+    "/v1/me/ig", "/v1/me/ig/disconnect", "/v1/me/postmortem", "/v1/me/besttime",
+    "/v1/me/profile", "/v1/me/profile/set",
+    "/v1/watchlist", "/v1/watchlist/add", "/v1/watchlist/remove",
+}
+
+
+USER_NOTE = ("These tools read the signed-in user's own Instagram account: insights, post reviews, best posting time, "
+             "profile and a saved creator list. Research tools are not available on this connection.")
+
+
+def _catalog_for_caller():
+    rows = catalog()
+    if not getattr(CALLER, "user_id", None):
+        return rows
+    return [row for row in rows if row["route"] in TENANT_ALLOWED_ROUTES]
+
+
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 
@@ -35,7 +57,7 @@ def handle(scout, routes, conv, msg):
                            "capabilities": {"tools": {"listChanged": True}, "resources": {},
                                             "extensions": {"io.modelcontextprotocol/ui": {}}},
                            "serverInfo": {"name": "kestrel", "version": "1.4.0"},
-                           "instructions": SETUP_NOTE + GATEWAY_NOTE})
+                           "instructions": USER_NOTE if getattr(CALLER, "user_id", None) else SETUP_NOTE + GATEWAY_NOTE})
     if method == "ping":
         return _result(i, {})
     if method == "resources/list":
@@ -51,12 +73,12 @@ def handle(scout, routes, conv, msg):
         return _result(i, {"contents": [{"uri": uri, "mimeType": scout_showcase.APP_MIME, "text": page,
                                          "_meta": {"ui": {"csp": scout_showcase.APP_CSP, "prefersBorder": False}}}]})
     if method == "tools/list":
-        return _result(i, {"tools": tool_list(catalog())})
+        return _result(i, {"tools": tool_list(_catalog_for_caller())})
     if method == "tools/call":
         p = msg.get("params") or {}
         name, raw = p.get("name"), p.get("arguments") or {}
         if name == "kestrel_tools":
-            return _result(i, {"content": [{"type": "text", "text": json.dumps({"tools": filter_catalog(catalog(), raw.get("search")),
+            return _result(i, {"content": [{"type": "text", "text": json.dumps({"tools": filter_catalog(_catalog_for_caller(), raw.get("search")),
                                                                                 "note": GATEWAY_NOTE})}], "isError": False})
         if name == "kestrel_call":
             name, raw = raw.get("tool"), raw.get("args") or {}
@@ -64,6 +86,10 @@ def handle(scout, routes, conv, msg):
         if not tool:
             return _result(i, {"content": [{"type": "text", "text": json.dumps({"error": "no Kestrel tool called %s. Call kestrel_tools for the list." % name})}],
                                "isError": True})
+        if getattr(CALLER, "user_id", None) and tool[1] not in TENANT_ALLOWED_ROUTES:
+            return _result(i, {"content": [{"type": "text", "text": json.dumps({
+                "error": "This tool uses the server operator's quota or accounts and is not available to signed-in users."
+            })}], "isError": True})
         _, want, spec = routes[tool[1]]
         method_name = routes[tool[1]][0]
         args = {k: v for k, v in raw.items() if v not in (None, "")}
