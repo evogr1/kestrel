@@ -193,7 +193,27 @@ class Cache:
                 os.chmod(directory, 0o700)
             except OSError:
                 pass
-            connections[digest] = self._open_db(os.path.join(directory, digest + ".sqlite"))
+            tenant_db = self._open_db(os.path.join(directory, digest + ".sqlite"))
+            # Kestrel's modules register table/index definitions against the operator's
+            # base DB during startup. Give each new tenant DB those definitions only;
+            # never copy rows, cache values, account data or credentials.
+            with self.lock:
+                schemas = self._base_db.execute(
+                    "select type, name, sql from sqlite_master "
+                    "where type in ('table','index','view','trigger') and sql is not null "
+                    "and name not like 'sqlite_%' order by "
+                    "case type when 'table' then 0 when 'view' then 1 when 'index' then 2 else 3 end"
+                ).fetchall()
+                present = {
+                    (row[0], row[1]) for row in tenant_db.execute(
+                        "select type, name from sqlite_master"
+                    ).fetchall()
+                }
+                for kind, name, ddl in schemas:
+                    if (kind, name) not in present:
+                        tenant_db.execute(ddl)
+                tenant_db.commit()
+            connections[digest] = tenant_db
         return connections[digest]
 
     def get(self, k):
