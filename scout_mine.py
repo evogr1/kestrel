@@ -362,12 +362,19 @@ class Mine:
         return _http("https://%s/%s/%s?%s" % (host, version, path, urllib.parse.urlencode(q)))
 
     def _ig_pick(self, account):
-        # Private account insights must never fall back to the shared Business Discovery pool.
-        if not getattr(CALLER, "user_id", None):
-            raise ScoutError("This operation requires an authenticated Kestrel user. Connect through the /mcp OAuth endpoint.", 401)
-        pool = self.ig.user_pool()
-        if not pool:
-            raise ScoutError("No Instagram account is connected to this Kestrel user. Reconnect Kestrel and authorize Instagram.", 401)
+        user_id = getattr(CALLER, "user_id", None)
+        caller_name = str(getattr(CALLER, "name", "") or "")
+        if user_id:
+            # MCP tenants are strictly limited to the Instagram token attached to their identity.
+            pool = self.ig.user_pool()
+            if not pool:
+                raise ScoutError("No Instagram account is connected to this Kestrel user. Reconnect Kestrel and authorize Instagram.", 401)
+        elif caller_name.startswith("mcp"):
+            # The explicitly enabled legacy shared MCP endpoint is never allowed to read private accounts.
+            raise ScoutError("Private Instagram insights require a user-authenticated Kestrel OAuth session.", 401)
+        else:
+            # Preserve the server operator's existing authenticated REST/CLI workflow.
+            pool = self.ig.pool()
         if not account:
             return pool
         a = account.strip().lstrip("@").lower()
@@ -389,10 +396,15 @@ class Mine:
                                  lambda: self._ig_get(t, t["ig_user_id"], fields="username,name,followers_count,follows_count,media_count"))
 
     def ig_accounts(self):
-        if not getattr(CALLER, "user_id", None):
-            raise ScoutError("This operation requires an authenticated Kestrel user.", 401)
+        user_id = getattr(CALLER, "user_id", None)
+        caller_name = str(getattr(CALLER, "name", "") or "")
+        if user_id:
+            pool = self.ig.user_pool()
+        elif caller_name.startswith("mcp"):
+            raise ScoutError("Private Instagram insights require a user-authenticated Kestrel OAuth session.", 401)
+        else:
+            pool = self.ig.pool()
         out = []
-        pool = self.ig.user_pool()
         for t in pool:
             try:
                 p = self._ig_profile(t)
