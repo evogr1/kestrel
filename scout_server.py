@@ -315,7 +315,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                scout_core.CALLER.name = "mcp"
+                scout_core.CALLER.name = "mcp:" + user_id
                 scout_core.CALLER.user_id = user_id
                 try:
                     if verb == "GET" and "text/event-stream" in (self.headers.get("Accept") or ""):
