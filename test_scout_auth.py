@@ -96,6 +96,14 @@ class InstagramAuthTests(unittest.TestCase):
             self.assertEqual(cache.get("private"), {"value": "B"})
             self.assertEqual(cache.db.execute("select count(*) from tracked").fetchone()[0], 0)
 
+            # Shared YouTube keys use one global daily quota while per-user caller caps stay distinct.
+            cache.add_usage("yt_units:0", 7)
+            cache.add_usage("ytc:mcp:tenant-A", 3)
+            scout_core.CALLER.user_id = "tenant-A"
+            self.assertEqual(cache.usage("yt_units:0"), 7)
+            self.assertEqual(cache.usage("ytc:mcp:tenant-A"), 3)
+            self.assertEqual(cache.usage("ytc:mcp:tenant-B"), 0)
+
             scout_core.CALLER.user_id = "tenant-A"
             self.assertEqual(cache.get("private"), {"value": "A"})
             self.assertEqual(cache.db.execute("select title from tracked").fetchone()[0], "Tenant A")
