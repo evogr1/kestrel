@@ -117,6 +117,7 @@ TOOLS = [
     ("scout_my_ig", "/v1/me/ig",
      "Your own Instagram insights: reach, views, interactions, follower demographics, and per-reel views, saves, shares and watch time.",
      {"account": S("Username or label. Default: all connected accounts"), "days": I("Default 28, max 30"), "reels": I("Reels to read. Default 25")}),
+    ("scout_disconnect_instagram", "/v1/me/ig/disconnect", "Disconnect your Instagram account from Kestrel. Removes the stored Meta access token and revokes every Kestrel OAuth session for this identity.", {}),
     ("scout_x_post", "/v1/x/post", "Free stats for one public X post: likes, replies, video views, author, age.", {"ref": S("Post URL or id")}),
     ("scout_x_posts", "/v1/x/posts", "Free stats for up to 20 X posts at once.", {"refs": S("Comma separated post URLs or ids")}),
     ("scout_x_profile", "/v1/x/profile", "An X account's followers and post count (X API, about $0.01).", {"user": S("X handle")}),
@@ -258,7 +259,7 @@ REQUIRED = {"scout_channel_stats": ["ref"], "scout_keyword_demand": ["seed"], "s
             "scout_optimize": ["ref"], "scout_my_race": ["channel"], "scout_my_scorecard": ["channel"],
             "scout_my_achievements": ["channel"], "scout_my_audience": ["channel"], "scout_x_post": ["ref"], "scout_x_posts": ["refs"],
             "scout_x_profile": ["user"], "scout_x_outliers": ["users"], "scout_x_search": ["query"], "scout_my_fb": ["page"], "scout_my_postmortem": ["account"], "scout_my_besttime": ["account"], "scout_clips": ["ref"], "scout_my_retention": ["channel"], "scout_my_live": ["channel"], "scout_my_reach": ["channel"], "scout_creator_breakdown": ["user"]}
-POST = {"/v1/watchlist/add", "/v1/watchlist/remove", "/v1/me/profile/set", "/v1/me/reach/sync", "/v1/brief/push", "/v1/watch", "/v1/hooks/extract", "/v1/me/weekly", "/v1/ingest", "/v1/niches/add", "/v1/niches/remove", "/v1/track/add", "/v1/track/remove", "/v1/jobs/daily"}
+POST = {"/v1/me/ig/disconnect", "/v1/watchlist/add", "/v1/watchlist/remove", "/v1/me/profile/set", "/v1/me/reach/sync", "/v1/brief/push", "/v1/watch", "/v1/hooks/extract", "/v1/me/weekly", "/v1/ingest", "/v1/niches/add", "/v1/niches/remove", "/v1/track/add", "/v1/track/remove", "/v1/jobs/daily"}
 
 
 SETUP_NOTE = ("If this is someone's first time with Kestrel, or a tool says a key is missing, run kestrel_setup and walk them through "
