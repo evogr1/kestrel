@@ -299,8 +299,12 @@ def connection_status(user_id):
 def error_page(message, public_url):
     safe = html.escape(str(message))
     retry = html.escape(public_url.rstrip("/") + "/connect/", quote=True)
-    return """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kestrel sign-in error</title></head>
-<body style="font:16px system-ui;max-width:680px;margin:60px auto;padding:24px"><h1>Instagram connection failed</h1><p>""" + safe + """</p><p><a href=\"""" + retry + """\">Start again</a></p></body></html>"""
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>Kestrel sign-in error</title></head><body style=\"font:16px system-ui;max-width:680px;margin:60px auto;padding:24px\">"
+        "<h1>Instagram connection failed</h1><p>" + safe + "</p><p><a href=\"" + retry + "\">Start again</a></p>"
+        "</body></html>"
+    )
 
 
 def disconnect(user_id):
