@@ -61,7 +61,11 @@ class KestrelOAuthTests(unittest.TestCase):
             "resource": scout_oauth.resource_uri(),
             "scope": "kestrel offline_access",
         }
-        meta_url = scout_oauth.begin(params)
+        consent = scout_oauth.prepare_authorization(params)
+        self.assertEqual(consent["client_name"], "Test MCP client")
+        meta_url = scout_oauth.accept_consent(consent["consent_token"])
+        with self.assertRaises(ValueError):
+            scout_oauth.accept_consent(consent["consent_token"])
         meta_state = parse_qs(urlparse(meta_url).query)["state"][0]
         replies = [
             {"access_token": "short-token-" + ig_user_id, "user_id": ig_user_id,
