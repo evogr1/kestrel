@@ -308,7 +308,7 @@ def make_server(scout, key, host="127.0.0.1", port=8799, mcp_secret=""):
                     self.send_response(401)
                     challenge = 'Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp", scope="kestrel"' % scout_oauth.issuer()
                     if raw_token:
-                        challenge = challenge[:-1] + ', error="invalid_token"'
+                        challenge += ', error="invalid_token"'
                     self.send_header("WWW-Authenticate", challenge)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Cache-Control", "no-store")
