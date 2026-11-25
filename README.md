@@ -21,9 +21,9 @@ Kestrel is **free**: no credits, no paid tier. The only limits are YouTube's and
 
 ## Connect Kestrel to your AI
 
-For the hosted Kestrel server, share **https://scout.solodac.com/connect/**. Each person connects their own Instagram professional account and receives a unique, revocable MCP URL. They do not need to clone this repository or install anything locally. They still need to approve adding the connector in their own ChatGPT or Claude account.
+For the hosted Kestrel server, share **https://scout.solodac.com/connect/**. The single MCP endpoint is **https://scout.solodac.com/mcp**. Each AI client registers as its own public OAuth client, signs the user in through Instagram Business Login, and receives a short-lived Kestrel bearer token bound to that user's identity. Kestrel stores the Instagram access token encrypted on the server; it is never passed to the AI client.
 
-The old shared `SCOUT_MCP_SECRET` connector route is disabled by default. Do not enable `SCOUT_ALLOW_SHARED_MCP` for a multi-user deployment.
+The service implements OAuth authorization-code flow with PKCE S256, protected-resource metadata, authorization-server metadata, dynamic client registration, resource/audience checks and rotating refresh tokens. The old shared `SCOUT_MCP_SECRET` path is disabled by default; do not enable `SCOUT_ALLOW_SHARED_MCP` on a multi-user deployment.
 
 ## Pick how you run it
 
@@ -51,15 +51,15 @@ docker run -d --name kestrel --restart unless-stopped -p 127.0.0.1:8799:8799 --e
 
 No Docker? `set -a; . ./.env; set +a; python3 scout_server.py` works too (Python 3.9+, standard library only; `pip install yt-dlp` is recommended).
 
-Then put it behind HTTPS (a Cloudflare Tunnel is the easiest free option) and add a custom connector in claude.ai (Settings, Connectors, Add custom connector) with the URL:
+Then put it behind HTTPS and add a custom connector in Claude with the URL:
 
 ```
-https://<your-domain>/mcp/<your SCOUT_MCP_SECRET>
+https://<your-domain>/mcp
 ```
 
-That URL is the key to your server. Don't post it, screenshot it or put it in a repo. If it leaks, change `SCOUT_MCP_SECRET` and restart.
+Choose OAuth / Sign in, and choose **Register automatically** for the OAuth client. Complete the Instagram authorization prompt. Do not choose “No sign in”. Every user signs in separately; do not use a shared bearer URL or a fixed request-header secret.
 
-**ChatGPT works too**, through the same server. In ChatGPT on the web: Settings, Apps and Connectors, Advanced settings, turn on Developer mode. Then create a connector, paste the same `https://<your-domain>/mcp/<your SCOUT_MCP_SECRET>` URL and choose no authentication. Every tool works, and the breakdown shows as the same live card (ChatGPT supports the MCP Apps standard Kestrel uses).
+**ChatGPT support** depends on the workspace plan and administrator permissions. Add a custom MCP app using the same `https://<your-domain>/mcp` endpoint, choose OAuth, and complete the sign-in flow. ChatGPT custom MCP support is currently available on Business and Enterprise/Edu workspaces; Pro has read/fetch limitations.
 
 Optional cron jobs on the host (these use Docker; without Docker, run them from the repo folder with your `.env` loaded the same way as the server):
 
@@ -83,7 +83,7 @@ The free quota is 10,000 units a day. Kestrel caches answers, keeps its own dail
 
 ### Instagram: each user's own account (OAuth)
 
-The hosted multi-user server uses **Instagram Business Login**. Every person connects their own Instagram Business or Creator account at `/connect/`; Kestrel stores a separate encrypted long-lived token and issues a separate revocable MCP URL. A user's private Instagram token is never shared with another Kestrel user.
+The hosted multi-user server uses **Instagram Business Login** as the first-release user identity provider. During the MCP OAuth authorization flow, each person authorizes their own Instagram Business or Creator account. Kestrel stores that account's long-lived token encrypted at rest and issues a separate OAuth access/refresh token pair to each MCP client. The AI client never receives the Meta token. The current first release supports one Instagram professional account per Kestrel identity.
 
 Configure these environment variables on the server:
 
@@ -95,9 +95,9 @@ Configure these environment variables on the server:
 
 The Docker image installs `cryptography`. Keep the persistent `/data` volume: it stores the per-user auth database. Do not rotate the encryption key unless you first re-encrypt every stored token.
 
-Kestrel requests `instagram_business_basic`, `instagram_business_manage_insights`, `instagram_business_content_publish`, `instagram_business_manage_comments` and `instagram_business_manage_messages`. These cover profile/media, insights, publishing, comments and messaging. Meta must grant the relevant access level and App Review approval before external customers can use restricted permissions. An Instagram Login token is used with `graph.instagram.com`; it is not interchangeable with the older Facebook Login token on `graph.facebook.com`. The current Kestrel tools actively use profile/media reads and insights; publishing, comment-management and messaging tools are not exposed yet, so those additional scopes are requested in preparation for the next feature phase and must be justified with matching product functionality in Meta App Review.
+Kestrel currently requests `instagram_business_basic` and `instagram_business_manage_insights`, which are used for professional profile/media reads and insights. Publishing, comment management and messaging are not requested until Kestrel exposes those capabilities and can justify their permissions in Meta App Review. Instagram Login uses `graph.instagram.com`; it is separate from the Facebook Login token pool used by public Business Discovery on `graph.facebook.com`. Meta App Review / Advanced Access may be required before external users can authorize the app.
 
-The per-user auth key is embedded in that user's MCP URL. It is shown once after connection, stored only as a hash, and can be revoked by reconnecting (rotates the key) or disconnecting.
+Users can revoke access by disconnecting Kestrel in their AI client's connector settings or by using Kestrel's account-disconnect endpoint. OAuth access tokens are audience-bound to the MCP endpoint and refresh tokens rotate; raw token values are not stored in the database.
 
 ### Public Instagram creator research (Business Discovery)
 
@@ -130,7 +130,8 @@ Everything is an environment variable (the `SCOUT_` prefix is from the project's
 | `SCOUT_YT_CALLER_PCT` | Most of the total one caller (job, chat) may use (default 30) |
 | `SCOUT_IG_CLIENT_ID`, `SCOUT_IG_CLIENT_SECRET`, `SCOUT_IG_REDIRECT_URI` | Instagram Business Login OAuth credentials and callback |
 | `SCOUT_IG_GRAPH_VERSION` | Graph API version for Instagram Login (default v27.0) |
-| `SCOUT_TOKEN_ENCRYPTION_KEY`, `SCOUT_AUTH_DB` | Encryption key and per-user auth database |
+| `SCOUT_PUBLIC_URL` | Canonical HTTPS base URL used by OAuth discovery (default `https://scout.solodac.com`) |
+| `SCOUT_TOKEN_ENCRYPTION_KEY`, `SCOUT_AUTH_DB` | Fernet key for Meta token encryption and auth/OAuth database |
 | `SCOUT_IG_TOKEN`, `SCOUT_IG_USER_ID` | Legacy/shared Business Discovery token and account id |
 | `SCOUT_IG_POOL` | JSON file with several tokens: `[{"label": "app1", "token": "...", "ig_user_id": "..."}]` |
 | `SCOUT_IG_PER_HOUR` | Instagram calls per hour per Meta app (default 120). Per app: `SCOUT_IG_PER_HOUR_<LABEL>` |
