@@ -116,7 +116,7 @@ ROUTES = {
     "/v1/me/reel_check": ("my_reel_check", "GET", {"reel": str, "me": str}),
     "/v1/me/profile": ("my_profile", "GET", {}),
     "/v1/me/profile/set": ("my_profile_set", "POST", {"instagram": str, "youtube": str, "x": str, "niche": str, "audience": str,
-                                                      "goal": str, "language": str}),
+                                                      "goal": str, "language": str, "topics": str, "competitors": str}),
     "/v1/breakdown": ("creator_breakdown", "GET", {"user": str, "me": str, "top": int, "transcribe": int, "platform": str}),
     "/v1/me/reach": ("me_reach", "GET", {"channel": str, "video": str, "days": int}),
     "/v1/me/reach/sync": ("reach_sync", "POST", {"channel": str}),

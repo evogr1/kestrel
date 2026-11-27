@@ -234,7 +234,8 @@ TOOLS = [
      "Only pass what they told you; anything left out stays as it was.",
      {"instagram": S("Their Instagram username"), "youtube": S("Their YouTube @handle or channel"), "x": S("Their X handle"),
       "niche": S("What their page is about, in a few words"), "audience": S("Who they make content for"),
-      "goal": S("What they want: followers, leads, sales, ..."), "language": S("Language they post in")}),
+      "goal": S("The results they want: followers, leads, sales, ..."),
+      "topics": S("Topics they post about"), "competitors": S("Creators or channels they compete with"), "language": S("Language they post in")}),
     ("scout_creator_breakdown", "/v1/breakdown",
      "Use this whenever the user asks to scrape, break down, analyse or find what's working for any creator on Instagram, YouTube or X "
      "(Twitter). One call per creator and platform: for two creators, call it twice. It opens their profile, pulls their recent posts, ranks the "
@@ -262,7 +263,7 @@ POST = {"/v1/watchlist/add", "/v1/watchlist/remove", "/v1/me/profile/set", "/v1/
 
 
 SETUP_NOTE = ("If this is someone's first time with Kestrel, or a tool says a key is missing, run kestrel_setup and walk them through "
-              "what it returns, one step at a time. ")
+              "what it returns, one step at a time. Then check scout_my_profile and ask for anything missing in one short message. ")
 GATEWAY_NOTE = ("Kestrel gains new tools over time and this chat's tool list can be older than the server. If you need something "
                 "that isn't in your list (for example live video stats, retention, clips, gaps), call kestrel_tools to see every tool "
                 "the server has right now, then run it with kestrel_call. Never tell the user to reconnect for a missing Kestrel tool.")
@@ -356,12 +357,18 @@ def notify(method):
 
 def main_local():
     """Run every tool in process, through the same code path the hosted /mcp endpoint uses."""
+    for k, v in list(os.environ.items()):
+        if v.startswith("${user_config."):                      # a setting left empty can arrive as the unfilled placeholder
+            del os.environ[k]
     import scout_core
     import scout_remote_mcp
     import scout_server
     from scout_core import Config
     from scout_extras import Kestrel
     scout = Kestrel(Config())
+    for stream in (sys.stdin, sys.stdout):                      # Windows defaults to a code page that cannot hold emoji titles
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     scout_core.CALLER.name = CALLER_NAME
     for line in sys.stdin:
         line = line.strip()

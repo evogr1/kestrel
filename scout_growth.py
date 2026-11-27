@@ -624,6 +624,9 @@ class Growth:
         plugin = os.environ.get("SCOUT_CALLER") == "plugin"
         where = ("open /config in Claude Code, find Kestrel and paste it there" if plugin
                  else "add it to your .env file and restart Kestrel")
+        desktop = os.environ.get("SCOUT_CALLER") == "desktop"
+        if desktop:
+            where = "in Claude Desktop open Settings, Extensions, Kestrel, Configure, paste it there and save"
         items = []
 
         def item(name, status, detail, unlocks, steps=None):
@@ -636,7 +639,10 @@ class Growth:
                     "Go to APIs and Services, Library, search 'YouTube Data API v3', press Enable.",
                     "Go to APIs and Services, Credentials, Create credentials, API key. Copy it.",
                     "Paste it as the YouTube API key: " + where + "."]
-        if not keys:
+        if not keys and desktop and os.path.exists(self.yt.cfg.ytdlp):
+            item("YouTube research", "working", "Works now without a key (fewer details, slower). A free Google key adds exact dates and channel sizes.",
+                 ["YouTube outliers, channel stats, YouTube breakdowns"], ["Optional upgrade:"] + yt_steps)
+        elif not keys:
             item("YouTube research", "missing", "No YouTube API key yet.", ["YouTube outliers, channel stats, YouTube breakdowns, keyword demand"], yt_steps)
         elif verify:
             try:
@@ -664,7 +670,7 @@ class Growth:
         except Exception:
             pass
         if not pool:
-            item("Instagram research", "missing", "No Instagram token yet. Uses Meta's official API, free.",
+            item("Instagram research", "optional" if desktop else "missing", "No Instagram token yet. Uses Meta's official API, free.",
                  ["Instagram creator breakdowns with real views", "Instagram outliers", "your own reel stats"], ig_steps)
         elif verify:
             try:
@@ -710,7 +716,7 @@ class Growth:
         item("About you", "working" if prof["set_up"] else "missing",
              "Saved: %s." % ", ".join("%s %s" % (k, v) for k, v in prof["profile"].items()) if prof["set_up"] else
              "Kestrel doesn't know your page, niche or audience yet.", ["scripts written for your niche and audience", "them-vs-you comparisons"],
-             [] if prof["set_up"] else ["Just tell Claude your Instagram username, what your page is about and who it's for."])
+             [] if prof["set_up"] else ["Just answer in chat: " + "; ".join(prof["ask_for"].values()) + "."])
 
         order = {"broken": 0, "missing": 1, "optional": 2, "working": 3}
         todo = sorted([i for i in items if i["status"] in ("broken", "missing")], key=lambda i: order[i["status"]])
@@ -722,9 +728,9 @@ class Growth:
                         "falls back to yt-dlp after that; Instagram allows about 200 calls an hour."}
 
     # ------------------------------------------------------------ 0. who I am (asked once, used by every breakdown)
-    PROFILE_FIELDS = {"instagram": "Your Instagram username", "youtube": "Your YouTube @handle or channel", "x": "Your X handle",
+    PROFILE_FIELDS = {"topics": "Topics you post about", "competitors": "Creators you compete with", "instagram": "Your Instagram username", "youtube": "Your YouTube @handle or channel", "x": "Your X handle",
                       "niche": "What your page is about, in a few words", "audience": "Who you're making it for",
-                      "goal": "What you want from it (followers, leads, sales...)", "language": "Language you post in"}
+                      "goal": "The results you want (followers, leads, sales...)", "language": "Language you post in"}
 
     def _profile_rows(self):
         self._w("create table if not exists my_profile(k text primary key, v text)")
@@ -733,13 +739,17 @@ class Growth:
     def my_profile(self):
         """What Kestrel knows about the person using it. Empty until they answer the setup questions once."""
         p = self._profile_rows()
-        missing = [k for k in ("instagram", "niche", "audience") if not p.get(k)]
+        desktop = os.environ.get("SCOUT_CALLER") == "desktop"
+        need = ("niche", "topics", "goal", "competitors", "audience") if desktop else ("instagram", "niche", "audience")
+        missing = [k for k in need if not p.get(k)]
         return {"profile": p, "set_up": not missing, "missing": missing,
                 "ask_for": {k: self.PROFILE_FIELDS[k] for k in missing},
                 "note": "Ask the user these once, in one short message, then save them with scout_my_profile_set." if missing else None}
 
-    def my_profile_set(self, instagram=None, youtube=None, x=None, niche=None, audience=None, goal=None, language=None):
-        vals = {"instagram": instagram, "youtube": youtube, "x": x, "niche": niche, "audience": audience, "goal": goal, "language": language}
+    def my_profile_set(self, instagram=None, youtube=None, x=None, niche=None, audience=None, goal=None, language=None,
+                       topics=None, competitors=None):
+        vals = {"instagram": instagram, "youtube": youtube, "x": x, "niche": niche, "audience": audience, "goal": goal, "language": language,
+                "topics": topics, "competitors": competitors}
         self._profile_rows()
         for k, v in vals.items():
             if v is None:

@@ -41,6 +41,12 @@ class HttpErr(Exception):
         self.code, self.body = code, body
 
 
+def _bundled_ytdlp():
+    """yt-dlp installed next to the running Python (desktop extension), else the usual per-user path."""
+    p = os.path.join(os.path.dirname(sys.executable), "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    return p if os.path.exists(p) else os.path.join(HOME, ".local/bin/yt-dlp")
+
+
 class Config:
     def __init__(self, **kw):
         e = os.environ.get
@@ -50,7 +56,7 @@ class Config:
         self.yt_keys = kw.get("yt_keys") or [k for k in [self.yt_key] + [e("YOUTUBE_API_KEY_%d" % i, "") for i in range(2, 10)] if k]
         self.yt_caller_pct = int(kw.get("yt_caller_pct", e("SCOUT_YT_CALLER_PCT", "30")))
         self.yt_budget = int(kw.get("yt_budget", e("SCOUT_YT_DAILY_UNITS", "8000")))
-        self.ytdlp = kw.get("ytdlp", e("YTDLP") or shutil.which("yt-dlp") or os.path.join(HOME, ".local/bin/yt-dlp"))
+        self.ytdlp = kw.get("ytdlp", e("YTDLP") or shutil.which("yt-dlp") or _bundled_ytdlp())
         self.proxy = kw.get("proxy", e("YT_PROXY", ""))
         self.dlp_pause = float(kw.get("dlp_pause", e("SCOUT_DLP_PAUSE", "1.0")))
         self.db = kw.get("db", e("SCOUT_DB", os.path.join(HOME, ".scout", "cache.sqlite")))
@@ -251,7 +257,7 @@ class YouTube:
         if self.cfg.proxy:
             cmd += ["--proxy", self.cfg.proxy]
         try:
-            r = subprocess.run(cmd + args, capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(cmd + args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         except subprocess.TimeoutExpired:
             raise ScoutError("yt-dlp timed out", 504)
         time.sleep(self.cfg.dlp_pause)

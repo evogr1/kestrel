@@ -19,6 +19,8 @@ Kestrel is **free**: no credits, no paid tier. The only limits are YouTube's and
 
 ---
 
+**Not technical?** [Install it in Claude Desktop with a double-click](INSTALL.md).
+
 ## Pick how you run it
 
 | | Claude Code plugin | Self-hosted server |
