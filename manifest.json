@@ -1,0 +1,85 @@
+{
+  "manifest_version": "0.4",
+  "name": "kestrel",
+  "display_name": "Kestrel",
+  "version": "1.4.1",
+  "description": "YouTube and Instagram research inside Claude. Runs on your own computer.",
+  "author": {
+    "name": "Harshil Rekhi",
+    "url": "https://instagram.com/harshilrekhi"
+  },
+  "homepage": "https://github.com/evogr1/kestrel",
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "scout_mcp.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "scout_mcp.py"
+      ],
+      "env": {
+        "YOUTUBE_API_KEY": "${user_config.youtube_api_key}",
+        "SCOUT_IG_TOKEN": "${user_config.instagram_token}",
+        "SCOUT_IG_USER_ID": "${user_config.instagram_user_id}",
+        "SCOUT_SHOWCASE_ME": "${user_config.my_instagram}",
+        "SCOUT_SHOWCASE_CTA": "${user_config.follow_handle}",
+        "SCOUT_CALLER": "desktop",
+        "PYTHONUTF8": "1"
+      }
+    }
+  },
+  "tools_generated": true,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  },
+  "user_config": {
+    "youtube_api_key": {
+      "type": "string",
+      "title": "YouTube Data API key (optional)",
+      "description": "Kestrel works without it. A free Google key adds exact dates and channel sizes. Guide: github.com/evogr1/kestrel/blob/main/INSTALL.md",
+      "required": false,
+      "default": "",
+      "sensitive": true
+    },
+    "instagram_token": {
+      "type": "string",
+      "title": "Instagram token (advanced, optional)",
+      "description": "From your own Meta app. Leave empty to start.",
+      "required": false,
+      "default": "",
+      "sensitive": true
+    },
+    "instagram_user_id": {
+      "type": "string",
+      "title": "Instagram user ID for that token (optional)",
+      "description": "The numeric instagram_business_account id of the account the token belongs to. The README shows how to find it.",
+      "required": false,
+      "default": ""
+    },
+    "my_instagram": {
+      "type": "string",
+      "title": "Your Instagram username (optional)",
+      "description": "Creator breakdowns compare the creator with this account and write advice for it. Leave empty to skip the comparison.",
+      "required": false,
+      "default": ""
+    },
+    "follow_handle": {
+      "type": "string",
+      "title": "Handle on the breakdown's end card (optional)",
+      "description": "The animated breakdown ends with 'Follow @<this>'. Leave empty to show 'Built with Kestrel'.",
+      "required": false,
+      "default": ""
+    }
+  }
+}

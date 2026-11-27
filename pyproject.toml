@@ -1,0 +1,5 @@
+[project]
+name = "kestrel-desktop"
+version = "1.4.1"
+requires-python = ">=3.10"
+dependencies = ["yt-dlp", "tzdata"]

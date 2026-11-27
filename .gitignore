@@ -7,3 +7,6 @@ youtube_token_*.json
 youtube_client.json
 ig_pool*.json
 .scout/
+*.mcpb
+uv.lock
+.venv/

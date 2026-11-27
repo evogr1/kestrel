@@ -1,0 +1,13 @@
+.git
+.github
+.claude-plugin
+.mcp.json
+test_*.py
+Dockerfile
+skills
+kestrel_icon_1024.png
+.env*
+__pycache__
+.venv
+*.mcpb
+uv.lock
